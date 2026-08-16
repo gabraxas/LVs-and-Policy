@@ -150,7 +150,7 @@ $$
 **이 강좌의 만능 지표: $/kg (kg당 수송단가)**
 
 $$
-\text{\$/kg} = \frac{\text{Launch Price(PpF)}}{\text{payload}}
+\text{\$/kg}=\frac{\text{LaunchPrice(PpF)}}{\text{payload}}
 $$
 
 - 기체·세대·국가를 가로질러 비교할 수 있는 공통 화폐
