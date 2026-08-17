@@ -693,3 +693,64 @@ def risk_frontier_explorer():
              highlight=Dropdown(options=list(_ARCHITECTURES.keys()), value="TSTO",
                                  description="아키텍처 선택", style={"description_width": "100px"}),
              show_frontier=widgets.Checkbox(value=True, description="프론티어 표시"))
+
+
+# ============================================================
+# 14. 우주왕복선 재사용 경제성 탐색기 (6주차 §PART III, 개념설명용 근사모델)
+# ============================================================
+def _plot_shuttle_economics(annual_flights, refurb_cost_musd, program_years):
+    # 개념 설명을 위한 근사 모델 — 실제 프로그램 원가 자료와 다를 수 있음
+    dev_cost = 30e9          # 개발비 (임의 근사, $)
+    orbiter_unit_cost = 2e9  # 기체(오비터) 단가 (임의 근사, $)
+    n_orbiters = 4
+    reuses_per_orbiter = 25  # 오비터당 설계 재사용 횟수 가정
+    ops_cost_per_flight = 80e6  # 발사장·관제 등 비행당 고정 운용비 (임의 근사)
+
+    flights_axis = np.arange(1, 51)
+    total_flights = flights_axis * program_years
+    orbiter_amort = (orbiter_unit_cost * n_orbiters) / (reuses_per_orbiter * n_orbiters)
+    cost_curve = (dev_cost / total_flights) + orbiter_amort + refurb_cost_musd * 1e6 + ops_cost_per_flight
+
+    sel_total_flights = annual_flights * program_years
+    sel_cost = dev_cost / sel_total_flights + orbiter_amort + refurb_cost_musd * 1e6 + ops_cost_per_flight
+
+    fig, ax = plt.subplots(figsize=(8.5, 5))
+    ax.plot(flights_axis, cost_curve / 1e6, color=PRIMARY, linewidth=2.4, zorder=3)
+    _style(ax)
+    ax.set_yscale("log")
+    ax.set_xlabel("연간 비행 횟수 (가정)")
+    ax.set_ylabel("회당 비용 ($M, 로그축)")
+
+    ax.plot(annual_flights, sel_cost / 1e6, "o", color=AMBER, markersize=11, zorder=5)
+    ax.axvline(annual_flights, color=AMBER, linestyle="--", linewidth=1, alpha=0.6)
+
+    ax.axvline(4.5, color=RED, linestyle=":", linewidth=1.4)
+    ax.annotate("실제 평균(연 4.5회)", (4.5, cost_curve.max() / 1e6 * 0.7), fontsize=8, color=RED,
+                xytext=(6, 0), textcoords="offset points")
+
+    ax.set_title(f"연 {annual_flights}회 비행 시 회당 비용 ≈ ${sel_cost/1e6:,.0f}M "
+                 f"(정비비 ${refurb_cost_musd:.0f}M/회 가정)")
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[가정] 개발비 ${dev_cost/1e9:.0f}B · 오비터 {n_orbiters}대 · 오비터당 재사용 {reuses_per_orbiter}회 · "
+          f"프로그램 기간 {program_years}년")
+    print(f"[선택] 연 {annual_flights}회 비행 → 총 {sel_total_flights:,.0f}회 → 회당 비용 ${sel_cost/1e6:,.0f}M")
+    print("  → 개발비 상환분은 비행 횟수가 늘수록 급격히 줄지만, 정비비·운용비는 줄지 않는다.")
+    print("  → 실제 셔틀의 평균 비행 빈도(연 4.5회 안팎)는 곡선의 왼쪽(고비용 구간)에 위치했다는 점이 핵심.")
+    print("  ※ 위 수치는 개념 설명을 위한 근사 모델이며, 실제 프로그램 원가 자료와 다를 수 있습니다.")
+
+
+def shuttle_reuse_economics_explorer():
+    """슬라이드14의 재사용 경제학 공식(회당비용 = 개발비/총비행수 + 기체비/재사용횟수 + 정비비 + 운용비)을
+    직접 조작 — 약속된 발사 빈도와 실제 발사 빈도의 격차가 회당 비용에 미치는 영향을 확인한다."""
+    interact(_plot_shuttle_economics,
+             annual_flights=IntSlider(value=10, min=1, max=50, step=1,
+                                       description="연간 비행 횟수",
+                                       style={"description_width": "110px"}, layout={"width": "480px"}),
+             refurb_cost_musd=FloatSlider(value=300, min=50, max=800, step=25,
+                                           description="정비비($M/회)",
+                                           style={"description_width": "110px"}, layout={"width": "480px"}),
+             program_years=IntSlider(value=30, min=10, max=40, step=5,
+                                      description="프로그램 기간(년)",
+                                      style={"description_width": "110px"}, layout={"width": "480px"}))
