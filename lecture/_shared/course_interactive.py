@@ -1285,3 +1285,181 @@ def golden_dome_budget_chart():
     print("CBO는 20년 총 비용을 약 $1.2조로 추정하지만 국방부는 이 추정치에 이의를 제기 — 추정치 간 편차가 큽니다.")
     print("SBI 프로토타입 계약은 12개사에 Other Transaction Authority(OTA)로 발주되어, COTS의 '경쟁유지' 철학이")
     print("안보 조달에도 이식된 사례로 해석됩니다.")
+
+# ============================================================
+# 25. Brander-Spencer 전략적 무역정책 탐색기 (10주차 §PART1 ECONOMICS)
+# ============================================================
+def _plot_brander_spencer(market_size, demand_slope, marginal_cost, subsidy):
+    A, b, c, s = market_size, demand_slope, marginal_cost, subsidy
+    X = A - c
+    s_grid = np.linspace(0, c * 0.95, 200)
+
+    qH = (X + 2 * s_grid) / (3 * b)
+    qF = (X - s_grid) / (3 * b)
+    qF = np.clip(qF, 0, None)
+    price = A - b * (qH + qF)
+
+    firm_profit_H = (price - c + s_grid) * qH        # 보조금 포함 기업 회계이윤
+    national_welfare_H = (price - c) * qH             # 보조금 비용 차감한 국가후생
+    profit_F = (price - c) * qF                        # 해외기업 이윤
+
+    idx_sel = np.argmin(np.abs(s_grid - s))
+    idx_opt = np.argmax(national_welfare_H)
+    s_opt = s_grid[idx_opt]
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.6))
+
+    ax = axes[0]
+    ax.plot(s_grid, firm_profit_H, color=AMBER, linewidth=2, label="자국기업 회계이윤(보조금 포함)", zorder=3)
+    ax.plot(s_grid, national_welfare_H, color=PRIMARY, linewidth=2.4, label="자국 국가후생(보조금 비용 차감)", zorder=3)
+    ax.plot(s_grid, profit_F, color=RED, linewidth=2, linestyle="--", label="해외기업 이윤", zorder=3)
+    ax.axvline(s_opt, color=PRIMARY, linestyle=":", linewidth=1.3)
+    ax.plot(s_grid[idx_sel], national_welfare_H[idx_sel], "o", color=PRIMARY, markersize=10, zorder=5)
+    ax.annotate(f"후생최대화 보조금\ns*≈{s_opt:.1f}", (s_opt, national_welfare_H[idx_opt]), fontsize=8,
+                color=PRIMARY, xytext=(8, -18), textcoords="offset points")
+    ax.set_facecolor("white")
+    for sp in ["top", "right"]:
+        ax.spines[sp].set_visible(False)
+    ax.grid(True, color=GRID, linewidth=0.8, zorder=0)
+    ax.set_xlabel("자국기업 보조금 s (단위당)")
+    ax.set_ylabel("이윤 / 후생")
+    ax.set_title("보조금이 이윤을 '이전'시키는가")
+    ax.legend(fontsize=7.5, frameon=False, loc="upper left")
+
+    ax = axes[1]
+    ax.plot(s_grid, qH, color=PRIMARY, linewidth=2.2, label="자국기업 생산량 qH", zorder=3)
+    ax.plot(s_grid, qF, color=RED, linewidth=2.2, label="해외기업 생산량 qF", zorder=3)
+    ax.axvline(s, color=INK_MUTED, linestyle=":", linewidth=1.2)
+    ax.set_facecolor("white")
+    for sp in ["top", "right"]:
+        ax.spines[sp].set_visible(False)
+    ax.grid(True, color=GRID, linewidth=0.8, zorder=0)
+    ax.set_xlabel("자국기업 보조금 s (단위당)")
+    ax.set_ylabel("생산량")
+    ax.set_title("보조금이 시장점유율을 이전시킨다")
+    ax.legend(fontsize=8.5, frameon=False)
+
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[입력] 시장규모 A={A}, 수요기울기 b={b}, 한계비용 c={c}, 보조금 s={s}")
+    print(f"[산출@s={s}] 자국생산 qH={qH[idx_sel]:.2f} · 해외생산 qF={qF[idx_sel]:.2f} · 시장가격={price[idx_sel]:.2f}")
+    print(f"  자국기업 회계이윤 = {firm_profit_H[idx_sel]:.2f} · 자국 국가후생(보조금 비용 차감) = {national_welfare_H[idx_sel]:.2f} · "
+          f"해외기업 이윤 = {profit_F[idx_sel]:.2f}")
+    print(f"  → 국가후생을 극대화하는 보조금은 s*≈{s_opt:.1f}입니다. s=0(자유무역)보다 국가후생이 "
+          f"{'높습니다' if national_welfare_H[idx_opt] > national_welfare_H[0] else '낮습니다'} — "
+          "이것이 Brander-Spencer 모형이 자유무역의 표준 결론을 뒤집는 지점입니다.")
+    print("  주의: 이 결과는 '정부가 시장구조·비용함수를 정확히 안다'는 강한 가정에 의존합니다 — "
+          "슬라이드23의 공공선택론 비판이 겨냥하는 지점이 바로 이 가정입니다.")
+
+
+def brander_spencer_explorer():
+    """소수 기업만 생존 가능한 과점시장(복점)에서, 자국기업에 대한 보조금이 해외기업의 시장점유율을
+    '이전'시켜 국가후생을 높일 수 있다는 Brander-Spencer(1985) 전략적 무역정책 모형을
+    Cournot 복점 게임으로 직접 조작해 확인한다."""
+    interact(_plot_brander_spencer,
+             market_size=FloatSlider(value=100, min=60, max=200, step=10,
+                                      description="시장규모 A",
+                                      style={"description_width": "120px"}, layout={"width": "480px"}),
+             demand_slope=FloatSlider(value=1.0, min=0.5, max=2.0, step=0.1,
+                                       description="수요기울기 b",
+                                       style={"description_width": "120px"}, layout={"width": "480px"}),
+             marginal_cost=FloatSlider(value=40, min=20, max=60, step=5,
+                                        description="한계비용 c",
+                                        style={"description_width": "120px"}, layout={"width": "480px"}),
+             subsidy=FloatSlider(value=10, min=0, max=40, step=2,
+                                  description="보조금 s",
+                                  style={"description_width": "120px"}, layout={"width": "480px"}))
+
+
+# ============================================================
+# 26. 5개국 정책동인 레이더 (10주차 §PART5·6, 정적 다이어그램)
+# ============================================================
+def national_strategy_radar():
+    """유럽·일본·중국·인도·러시아 5개국의 발사체 전략을 '경제/안보/위신' 세 렌즈의 비중으로
+    겹쳐 보여준다. 점수는 강의 슬라이드17~21의 질적 서술을 예시적으로 수치화한 것으로,
+    정밀한 계량치가 아니라 상대적 비중을 직관적으로 비교하기 위한 것이다 (정적 다이어그램)."""
+    countries = {
+        "유럽":   {"경제": 2, "안보": 3, "위신": 4, "color": PRIMARY},
+        "일본":   {"경제": 4, "안보": 3, "위신": 2, "color": AMBER},
+        "중국":   {"경제": 4, "안보": 5, "위신": 5, "color": RED},
+        "인도":   {"경제": 3, "안보": 1, "위신": 5, "color": GREEN},
+        "러시아": {"경제": 1, "안보": 2, "위신": 2, "color": "#8E6C8A"},
+    }
+    axes_labels = ["경제", "안보", "위신"]
+    n = len(axes_labels)
+    angles = [i / n * 2 * np.pi for i in range(n)]
+    angles += angles[:1]
+
+    fig, ax = plt.subplots(figsize=(7.2, 7.2), subplot_kw={"polar": True})
+    ax.set_theta_offset(np.pi / 2)
+    ax.set_theta_direction(-1)
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(axes_labels, fontsize=12)
+    ax.set_ylim(0, 5)
+    ax.set_yticks([1, 2, 3, 4, 5])
+    ax.set_yticklabels(["1", "2", "3", "4", "5"], fontsize=8, color=INK_MUTED)
+    ax.grid(True, color=GRID, linewidth=0.8)
+
+    for name, scores in countries.items():
+        vals = [scores[a] for a in axes_labels]
+        vals += vals[:1]
+        ax.plot(angles, vals, color=scores["color"], linewidth=2, label=name, zorder=3)
+        ax.fill(angles, vals, color=scores["color"], alpha=0.06, zorder=2)
+
+    ax.set_title("5개국 발사체 전략의 1·2차 동인 비중 (예시적 스코어링)", fontsize=12, color=INK, pad=20)
+    ax.legend(loc="upper right", bbox_to_anchor=(1.35, 1.1), fontsize=10, frameon=False)
+    plt.tight_layout()
+    plt.show()
+
+    print("중국은 세 렌즈 모두에서 높은 점수 — '경제+안보 완전결합, 위신(우주굴기)'이라는 슬라이드19의 서술과 일치합니다.")
+    print("인도는 위신이 압도적으로 높고 안보는 낮음 — 안보 앵커 없이 순수 상업·위신 동력만으로 움직이는 구조입니다.")
+    print("러시아는 세 축 모두 낮게 나타나는데, 이는 '경로의존·매몰비용'이라는 제4의 동인이 이 프레임워크 바깥에서")
+    print("작동하고 있음을 시사합니다 — 세 렌즈로 설명되지 않는 예외 사례라는 것 자체가 중요한 발견입니다.")
+
+
+# ============================================================
+# 27. 비교산업 3렌즈 히트맵 (10주차 §PART4, 정적 다이어그램)
+# ============================================================
+def comparative_industries_heatmap():
+    """조선·반도체·전투기·원자력·발사체 5개 산업이 '경제 스필오버·안보 외부성·국가위신'
+    세 렌즈에 얼마나 강하게 걸쳐 있는지를 히트맵으로 비교한다. 점수는 슬라이드13~15의
+    질적 서술을 예시적으로 수치화한 것이다 (정적 다이어그램)."""
+    industries = ["조선", "반도체", "전투기", "원자력", "발사체"]
+    lenses = ["경제(스필오버)", "안보(외부성)", "위신"]
+    scores = np.array([
+        [3, 4, 2],   # 조선
+        [4, 5, 3],   # 반도체
+        [2, 5, 3],   # 전투기
+        [3, 4, 2],   # 원자력
+        [4, 5, 4],   # 발사체
+    ])
+
+    fig, ax = plt.subplots(figsize=(7.5, 5.2))
+    im = ax.imshow(scores, cmap="YlOrRd", vmin=0, vmax=5, aspect="auto")
+
+    ax.set_xticks(range(len(lenses)))
+    ax.set_xticklabels(lenses, fontsize=10)
+    ax.set_yticks(range(len(industries)))
+    ax.set_yticklabels(industries, fontsize=11)
+
+    for i in range(len(industries)):
+        for j in range(len(lenses)):
+            v = scores[i, j]
+            txt_color = "white" if v >= 4 else INK
+            ax.text(j, i, str(v), ha="center", va="center", fontsize=13,
+                    fontweight="bold", color=txt_color)
+
+    for i, name in enumerate(industries):
+        if name == "발사체":
+            ax.add_patch(plt.Rectangle((-0.5, i - 0.5), len(lenses), 1, fill=False,
+                                        edgecolor=INK, linewidth=2.5, zorder=5))
+
+    ax.set_title("5개 산업 × 3개 렌즈 — 발사체가 유일하게 세 축 모두에서 높은 산업",
+                  fontsize=11.5, color=INK, pad=10)
+    plt.tight_layout()
+    plt.show()
+
+    print("발사체(굵은 테두리)는 경제·안보·위신 세 렌즈 모두에서 높은 점수를 받는 유일한 산업입니다.")
+    print("반도체·전투기는 안보 축에서, 조선·원자력은 경제·안보 결합에서 강하지만, 위신 축까지 모두 강한 것은")
+    print("발사체가 유일합니다 — 슬라이드15가 '두 축이 동시에 작동하는 유일한 산업'이라 지목하는 이유입니다.")
