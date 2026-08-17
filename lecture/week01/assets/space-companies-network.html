@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>우주 참여기업 지형 · 매출 규모 네트워크 2005 ↔ 2025</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+  :root{
+    --bg0:#070B14; --bg1:#0B1220; --panel:#0E1626; --border:#1C2A42; --line:#22324E;
+    --text:#E8EEF9; --dim:#8FA1BF; --faint:#56657F;
+    --prime:#5B8DEF; --operator:#F4B740; --launchL:#8A93A8; --newspace:#FF6B4A; --eo:#5FD06B; --inspace:#B98BFF;
+    --mono:'SF Mono',ui-monospace,'Cascadia Mono','Roboto Mono',Menlo,Consolas,monospace;
+    --kr:'Pretendard','Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',-apple-system,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:
+     radial-gradient(1200px 700px at 80% -12%, #122036 0, transparent 60%),
+     radial-gradient(900px 600px at 8% 112%, #10203a 0, transparent 55%),
+     linear-gradient(180deg,var(--bg0),var(--bg1));
+     color:var(--text);font-family:var(--kr);-webkit-font-smoothing:antialiased}
+  body{padding:20px clamp(12px,3vw,34px) 28px}
+  .wrap{max-width:1300px;margin:0 auto}
+  header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:18px 24px;margin-bottom:14px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.32em;color:var(--faint);text-transform:uppercase;margin:0 0 8px}
+  h1{margin:0;font-size:clamp(21px,3vw,32px);font-weight:760;letter-spacing:-.01em;line-height:1.12}
+  h1 .accent{color:var(--newspace)}
+  .sub{margin:9px 0 0;color:var(--dim);font-size:13.5px;max-width:64ch;line-height:1.55}
+  .toggle{display:inline-flex;background:var(--panel);border:1px solid var(--border);border-radius:13px;padding:4px;gap:3px;align-self:flex-start}
+  .toggle button{font-family:var(--kr);cursor:pointer;border:0;background:transparent;color:var(--dim);
+     padding:9px 15px;border-radius:9px;font-size:13px;font-weight:650;transition:.28s;display:flex;flex-direction:column;align-items:flex-start;gap:2px;line-height:1}
+  .toggle button small{font-family:var(--mono);font-size:10px;font-weight:500;color:var(--faint);letter-spacing:.05em}
+  .toggle button[aria-pressed="true"]{background:linear-gradient(180deg,#17263f,#13203a);color:var(--text);box-shadow:0 1px 0 #2a3c5c inset,0 6px 16px -8px #000}
+  .toggle button[aria-pressed="true"].new small{color:var(--newspace)}
+  .toggle button[aria-pressed="true"].old small{color:var(--prime)}
+
+  .telem{display:grid;grid-template-columns:repeat(8,1fr);gap:9px;margin:6px 0 14px}
+  @media(max-width:980px){.telem{grid-template-columns:repeat(4,1fr)}}
+  @media(max-width:520px){.telem{grid-template-columns:repeat(2,1fr)}}
+  .cell{background:linear-gradient(180deg,var(--panel),#0b1322);border:1px solid var(--border);border-radius:11px;padding:11px 12px 10px;position:relative;overflow:hidden}
+  .cell::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--accent,var(--prime));opacity:.85}
+  .cell .k{font-size:10.5px;color:var(--faint);margin-bottom:7px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cell .v{font-family:var(--mono);font-size:clamp(15px,1.9vw,20px);font-weight:600;letter-spacing:-.01em;line-height:1}
+  .cell .u{font-size:10px;color:var(--dim);margin-top:5px;font-family:var(--mono)}
+
+  .stage{position:relative;background:linear-gradient(180deg,#0a1322 0,#070d18 100%);
+     border:1px solid var(--border);border-radius:16px;overflow:hidden;box-shadow:0 26px 60px -34px #000,0 0 0 1px #0c1525 inset}
+  svg{display:block;width:100%;height:clamp(460px,66vh,700px);cursor:grab;touch-action:none}
+  svg:active{cursor:grabbing}
+  .anchor-l{font-family:var(--kr);font-size:12px;font-weight:760;text-anchor:middle;letter-spacing:.02em}
+  .anchor-s{font-family:var(--mono);font-size:8px;text-anchor:middle;fill:var(--faint);letter-spacing:.08em}
+  .clabel{font-family:var(--kr);font-weight:650;text-anchor:middle;pointer-events:none;paint-order:stroke;
+     stroke:#070d18;stroke-width:2.6px;stroke-linejoin:round}
+  .node circle{cursor:pointer}
+  line.edge{stroke-linecap:round}
+
+  .below{display:flex;flex-wrap:wrap;justify-content:space-between;gap:16px;margin-top:12px;align-items:flex-start}
+  .legend{display:flex;flex-wrap:wrap;gap:7px 14px;max-width:62%}
+  .lg{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--dim)}
+  .lg i{width:10px;height:10px;border-radius:50%;display:inline-block;box-shadow:0 0 9px -1px currentColor}
+  .sizekey{display:flex;align-items:flex-end;gap:13px;color:var(--faint);font-size:10.5px;font-family:var(--mono)}
+  .sizekey .sk{display:flex;flex-direction:column;align-items:center;gap:4px}
+  .sizekey svg{width:auto;height:auto;cursor:default}
+  .sizekey b{color:var(--dim);font-weight:600}
+  .note{color:var(--faint);font-size:11px;max-width:100%;line-height:1.5;margin:10px 0 0}
+  .note b{color:var(--dim);font-weight:600}
+
+  #tip{position:fixed;pointer-events:none;z-index:30;opacity:0;transform:translateY(4px);transition:opacity .14s,transform .14s;
+     background:rgba(11,18,32,.97);border:1px solid var(--border);border-radius:10px;padding:9px 11px;max-width:248px;box-shadow:0 16px 40px -16px #000;backdrop-filter:blur(6px)}
+  #tip .t{font-size:12.5px;font-weight:700;margin-bottom:5px;display:flex;align-items:center;gap:7px}
+  #tip .t i{width:8px;height:8px;border-radius:50%;flex:none}
+  #tip .row{display:flex;justify-content:space-between;gap:14px;font-size:11px;color:var(--dim);margin:2px 0}
+  #tip .row b{color:var(--text);font-family:var(--mono)}
+  #tip .d{font-size:10.5px;color:var(--faint);line-height:1.5;margin-top:6px}
+  @media(prefers-reduced-motion:reduce){*{transition-duration:.01ms!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <p class="eyebrow">Space Sector · Participants by Revenue</p>
+      <h1>우주 참여기업 지형의 변화 — <span class="accent">매출 규모 네트워크</span></h1>
+      <p class="sub">원의 크기는 우주 관련 매출 규모, 색은 기업 유형, 위치는 주력 가치사슬 영역입니다. 토글을 바꾸면 2005년의 방산 프라임·위성운영사 중심 지형이, SpaceX를 정점으로 NewSpace·지구관측·In-Space가 새로 채워진 2025년 지형으로 재편됩니다.</p>
+    </div>
+    <div class="toggle" role="group" aria-label="시대 선택">
+      <button class="old" data-era="o" aria-pressed="false">2005 · Old Space<small>프라임·운영사 중심</small></button>
+      <button class="new" data-era="n" aria-pressed="true">2025 · NewSpace<small>SpaceX 정점·다극화</small></button>
+    </div>
+  </header>
+
+  <div class="telem" id="telem"></div>
+
+  <div class="stage"><svg id="net" aria-label="우주 참여기업 매출 규모 네트워크"></svg></div>
+
+  <div class="below">
+    <div class="legend" id="legend"></div>
+    <div class="sizekey" id="sizekey"></div>
+  </div>
+  <p class="note">노드 크기 = 우주 관련 추정 매출(면적 비례). 위성TV 소매 등 순수 소비서비스는 제외하고 <b>제조·발사·운영·관측·In-Space</b> 기업으로 한정. 2005년 수치는 출처·세그먼트 정의에 따라 편차가 있는 <b>근사치</b>이며, 점유율·집중도는 표시된 기업 합계 기준으로 실시간 산출됩니다. 출처: Orbital Radar·Novaspace·SpaceNews·Space Foundation·기업 공시.</p>
+</div>
+<div id="tip" role="tooltip"></div>
+
+<script>
+// ── 유형/색 ──
+const TYPE={
+  prime    :{c:'#5B8DEF',name:'방산·항공 프라임'},
+  operator :{c:'#F4B740',name:'위성 운영·통신사'},
+  launchL  :{c:'#8A93A8',name:'전통 발사 서비스'},
+  newspace :{c:'#FF6B4A',name:'NewSpace 발사·통합'},
+  eo       :{c:'#5FD06B',name:'지구관측·데이터'},
+  inspace  :{c:'#B98BFF',name:'In-Space·정거장·신흥'},
+};
+const NS_SET=new Set(['newspace','eo','inspace']); // 신흥 분류
+// ── 세그먼트 앵커(주력 영역) ──
+const SEG={
+  launch :{name:'발사',     sub:'LAUNCH',      x:0.17,y:0.30},
+  mfg    :{name:'위성 제조', sub:'MANUFACTURE', x:0.50,y:0.22},
+  operate:{name:'운영·통신', sub:'OPERATE',     x:0.83,y:0.30},
+  eo     :{name:'지구관측',  sub:'EARTH OBS',   x:0.27,y:0.76},
+  inspace:{name:'In-Space', sub:'ON-ORBIT',    x:0.57,y:0.78},
+  ground :{name:'지상·장비', sub:'GROUND',      x:0.85,y:0.74},
+};
+
+// ── 기업: rev{o,n}=2005/2025 추정 매출($B), 0=미참여 ──
+const C=[
+ // 프라임
+ {id:'lmt', name:'Lockheed Martin Space', type:'prime', seg:['mfg'], rev:{o:6.5,n:12}, d:'GPS III·Orion. 2024 Terran Orbital 인수로 소형위성 양산 추가.'},
+ {id:'airbus', name:'Airbus D&S', nameOld:'EADS Astrium', type:'prime', seg:['mfg'], rev:{o:3.5,n:14}, d:'유럽 최대 우주·방산. Arianespace 모회사 ArianeGroup 지분.'},
+ {id:'noc', name:'Northrop Grumman Space', type:'prime', seg:['mfg','inspace'], rev:{o:3.0,n:9.2}, d:'Orbital ATK 흡수(2018). MEV 궤도서비스 선구.'},
+ {id:'boe', name:'Boeing Space', type:'prime', seg:['mfg','launch'], rev:{o:3.0,n:5.8}, d:'ULA 공동 모회사. Starliner·위성. 상대적 위상 축소.'},
+ {id:'thales', name:'Thales Alenia Space', nameOld:'Alcatel Alenia Space', type:'prime', seg:['mfg'], rev:{o:2.4,n:2.4}, d:'2007 Thales·Leonardo JV로 재편. 통신위성 100기+.'},
+ {id:'melco', name:'Mitsubishi (MHI·MELCO)', type:'prime', seg:['mfg','launch'], rev:{o:1.5,n:2.5}, d:'일본 제조·H3 발사. 정부 의존 구조.'},
+ {id:'l3h', name:'L3Harris Space', type:'prime', seg:['mfg','ground'], rev:{o:0,n:3.0}, d:'L3·Harris 합병(2019). 센서·지상계 강세.'},
+ {id:'rtx', name:'RTX (Raytheon)', nameOld:'Raytheon', type:'prime', seg:['mfg','ground'], rev:{o:1.0,n:2.0}, d:'탑재체·센서·지상계 중심.'},
+
+ // 전통 발사
+ {id:'ariane', name:'Arianespace', type:'launchL', seg:['launch'], rev:{o:1.1,n:1.3}, d:'유럽의 보장된 우주접근. SpaceX 압박 속 Ariane 6 전환.'},
+ {id:'ula', name:'ULA', type:'launchL', seg:['launch'], rev:{o:0,n:2.0}, d:'Boeing·Lockheed JV(2006~). Vulcan으로 Atlas/Delta 대체.'},
+ {id:'ils', name:'ILS (Proton)', type:'launchL', seg:['launch'], rev:{o:0.7,n:0}, d:'러시아 Proton 상업판매. 현재 사실상 시장 퇴장.'},
+ {id:'sealaunch', name:'Sea Launch', type:'launchL', seg:['launch'], rev:{o:0.3,n:0}, d:'해상 발사 컨소시엄. 2014년 운영 중단.'},
+ {id:'orbital', name:'Orbital Sciences', type:'launchL', seg:['launch','mfg'], rev:{o:0.7,n:0}, d:'소형발사·위성. 2018 Northrop에 흡수.'},
+
+ // 운영·통신
+ {id:'ses', name:'SES (+Intelsat)', type:'operator', seg:['operate'], rev:{o:1.9,n:4.5}, d:'2001 GE Americom 인수, 2025 Intelsat($3.1B) 합병으로 세계 최대 FSS.'},
+ {id:'intelsat', name:'Intelsat', type:'operator', seg:['operate'], rev:{o:1.7,n:0}, d:'2006 PanAmSat 인수했으나 2025 SES에 피인수.'},
+ {id:'eutelsat', name:'Eutelsat (+OneWeb)', type:'operator', seg:['operate'], rev:{o:0.9,n:1.3}, d:'2023 OneWeb 합병으로 GEO+LEO 하이브리드 전환.'},
+ {id:'panamsat', name:'PanAmSat', type:'operator', seg:['operate'], rev:{o:0.86,n:0}, d:'2004 사모펀드 LBO 후 2006 Intelsat에 매각.'},
+ {id:'viasat', name:'Viasat (+Inmarsat)', type:'operator', seg:['operate','ground'], rev:{o:0,n:3.0}, d:'2023 Inmarsat($7.3B) 인수. 광대역+해양·항공.'},
+ {id:'inmarsat', name:'Inmarsat', type:'operator', seg:['operate'], rev:{o:0.5,n:0}, d:'해양·이동위성. 2023 Viasat에 피인수.'},
+ {id:'telesat', name:'Telesat', type:'operator', seg:['operate'], rev:{o:0.4,n:0.5}, d:'캐나다 GEO+Lightspeed LEO 추진.'},
+ {id:'iridium', name:'Iridium', type:'operator', seg:['operate'], rev:{o:0.2,n:0.83}, d:'LEO 음성·IoT. 파산(2000) 후 부활, 흑자 전환.'},
+ {id:'globalstar', name:'Globalstar', type:'operator', seg:['operate'], rev:{o:0.1,n:0.25}, d:'LEO 통신. Apple 위성 SOS 파트너로 재기.'},
+
+ // NewSpace 발사·통합
+ {id:'spacex', name:'SpaceX', type:'newspace', seg:['launch','operate'], rev:{o:0,n:18}, d:'재사용 Falcon + Starlink(~$10.4B). 단일 기업으로 부문 최대 매출.'},
+ {id:'rklb', name:'Rocket Lab', type:'newspace', seg:['launch','mfg'], rev:{o:0,n:0.55}, d:'소형발사+위성 수직통합. SpaceX 다음 상장 대표주.'},
+ {id:'blue', name:'Blue Origin', type:'newspace', seg:['launch','inspace'], rev:{o:0,n:0.4}, d:'New Glenn·Blue Moon. 대규모 투자, 매출 본격화 초기.'},
+ {id:'firefly', name:'Firefly', type:'newspace', seg:['launch','inspace'], rev:{o:0,n:0.15}, d:'Alpha 발사+달 착륙(Blue Ghost). 2025 상장.'},
+ {id:'relativity', name:'Relativity Space', type:'newspace', seg:['launch'], rev:{o:0,n:0.05}, d:'3D프린팅 Terran R 재사용 중대형 개발.'},
+ {id:'ast', name:'AST SpaceMobile', type:'newspace', seg:['operate'], rev:{o:0,n:0.1}, d:'위성↔일반 스마트폰 Direct-to-Cell. 매출 초기.'},
+
+ // 지구관측·데이터
+ {id:'spaceimg', name:'Space Imaging/DigitalGlobe', type:'eo', seg:['eo'], rev:{o:0.15,n:0}, d:'2000년대 상업 EO 태동기 선두(후일 Maxar로 통합).'},
+ {id:'maxar', name:'Maxar', type:'eo', seg:['eo','mfg'], rev:{o:0,n:2.2}, d:'DigitalGlobe+SS/Loral 계보. 고해상 영상·위성 제조.'},
+ {id:'planet', name:'Planet Labs', type:'eo', seg:['eo'], rev:{o:0,n:0.25}, d:'소형위성 군집으로 매일 전지구 촬영.'},
+ {id:'iceye', name:'ICEYE', type:'eo', seg:['eo'], rev:{o:0,n:0.15}, d:'SAR 소형위성. 재난·보험 영상 강세.'},
+ {id:'blacksky', name:'BlackSky', type:'eo', seg:['eo'], rev:{o:0,n:0.1}, d:'실시간 관측·분석 플랫폼.'},
+ {id:'spire', name:'Spire', type:'eo', seg:['eo'], rev:{o:0,n:0.1}, d:'기상·선박/항공 추적 데이터.'},
+ {id:'satellogic', name:'Satellogic', type:'eo', seg:['eo'], rev:{o:0,n:0.05}, d:'초저가 고해상 EO 군집.'},
+
+ // In-Space·정거장
+ {id:'axiom', name:'Axiom Space', type:'inspace', seg:['inspace'], rev:{o:0,n:0.3}, d:'민간 우주정거장·유인 미션.'},
+ {id:'voyager', name:'Voyager (Starlab)', type:'inspace', seg:['inspace'], rev:{o:0,n:0.15}, d:'Airbus·MHI·MDA와 ISS 후속 정거장.'},
+ {id:'im', name:'Intuitive Machines', type:'inspace', seg:['inspace'], rev:{o:0,n:0.2}, d:'민간 달 착륙·CLPS. 달 데이터릴레이.'},
+ {id:'astro', name:'Astroscale', type:'inspace', seg:['inspace'], rev:{o:0,n:0.1}, d:'궤도 잔해 제거·수명연장 서비스.'},
+];
+
+// ── 링크: 기업 → 세그먼트 앵커 ──
+const L=[];
+C.forEach(c=>c.seg.forEach(s=>L.push({s:c.id,t:'SEG_'+s})));
+
+// ── 메트릭 산출 ──
+function metricsFor(era){
+  const act=C.filter(c=>c.rev[era]>0);
+  const total=d3.sum(act,c=>c.rev[era]);
+  const sorted=act.map(c=>c.rev[era]).sort((a,b)=>b-a);
+  const top1=sorted[0]/total;
+  const cr3=d3.sum(sorted.slice(0,3))/total;
+  const ns=act.filter(c=>NS_SET.has(c.type));
+  const nsShare=d3.sum(ns,c=>c.rev[era])/total;
+  const hhi=d3.sum(act,c=>Math.pow(c.rev[era]/total*100,2));
+  return {n:act.length,total,top1:top1*100,cr3:cr3*100,nsCount:ns.length,nsShare:nsShare*100,avg:total/act.length,hhi};
+}
+const MO=metricsFor('o'), MN=metricsFor('n');
+const METRICS=[
+ {k:'참여 기업 수',a:'#2FD2C8',o:MO.n,n:MN.n,suf:'개사',f:v=>Math.round(v)},
+ {k:'표시 총매출',a:'#F4B740',o:MO.total,n:MN.total,suf:'$B (추정)',f:v=>'$'+Math.round(v)+'B'},
+ {k:'최대기업 점유율',a:'#FF6B4A',o:MO.top1,n:MN.top1,suf:'%  (1위)',f:v=>v.toFixed(1)+'%'},
+ {k:'상위 3사 집중(CR3)',a:'#5B8DEF',o:MO.cr3,n:MN.cr3,suf:'%',f:v=>v.toFixed(0)+'%'},
+ {k:'신흥·NewSpace',a:'#5FD06B',o:MO.nsCount,n:MN.nsCount,suf:'개사',f:v=>Math.round(v)},
+ {k:'신흥 매출 점유율',a:'#B98BFF',o:MO.nsShare,n:MN.nsShare,suf:'%',f:v=>v.toFixed(0)+'%'},
+ {k:'평균 기업매출',a:'#9AA8BE',o:MO.avg,n:MN.avg,suf:'$B',f:v=>'$'+v.toFixed(1)+'B'},
+ {k:'집중도 HHI',a:'#EAF0FA',o:MO.hhi,n:MN.hhi,suf:'지수',f:v=>Math.round(v)},
+];
+
+// ── 렌더 ──
+const svg=d3.select('#net');
+let W=0,H=0,era='n';
+const gLink=svg.append('g'),gAnc=svg.append('g'),gNode=svg.append('g');
+const OBJ=new Map(), ANC=new Map();
+let nodeSel=gNode.selectAll('g'),linkSel=gLink.selectAll('line'),highlight=null;
+
+const sim=d3.forceSimulation()
+  .force('link',d3.forceLink().id(d=>d.id).distance(46).strength(0.08))
+  .force('charge',d3.forceManyBody().strength(-46))
+  .force('x',d3.forceX(d=>d._tx).strength(0.16))
+  .force('y',d3.forceY(d=>d._ty).strength(0.16))
+  .force('collide',d3.forceCollide(d=>d._r+2.5).strength(0.92))
+  .alphaDecay(0.04).on('tick',tick);
+
+function rOf(rev){return Math.max(5.5, Math.min(48, 4.5+9.2*Math.sqrt(rev)));}
+
+function build(){
+  // 앵커 객체
+  Object.entries(SEG).forEach(([k,s])=>{
+    let a=ANC.get(k); if(!a){a={id:'SEG_'+k,seg:k,anchor:true,x:s.x*W,y:s.y*H};ANC.set(k,a);}
+    a._tx=s.x*W; a._ty=s.y*H; a.x=a.x||a._tx; a.y=a.y||a._ty;
+  });
+  const act=C.filter(c=>c.rev[era]>0);
+  act.forEach(c=>{
+    let o=OBJ.get(c.id);
+    const prim=SEG[c.seg[0]];
+    if(!o){o=Object.assign({},c); o.x=prim.x*W+(Math.random()-.5)*60; o.y=prim.y*H+(Math.random()-.5)*60; OBJ.set(c.id,o);}
+    o._tx=prim.x*W; o._ty=prim.y*H;
+    o._rev=c.rev[era]; o._r=rOf(c.rev[era]);
+    o._name=(era==='o'&&c.nameOld)?c.nameOld:c.name;
+  });
+  const nodes=act.map(c=>OBJ.get(c.id));
+  const anchors=Object.keys(SEG).map(k=>ANC.get(k));
+  const ids=new Set(act.map(c=>c.id));
+  const links=L.filter(l=>ids.has(l.s)).map(l=>({source:OBJ.get(l.s),target:ANC.get(l.t.slice(4)),id:l.s+'>'+l.t,col:TYPE[OBJ.get(l.s).type].c}));
+  return {nodes,anchors,links,total:d3.sum(act,c=>c.rev[era])};
+}
+
+let TOTAL=1;
+function render(){
+  const {nodes,anchors,links,total}=build(); TOTAL=total;
+
+  // anchors (영역 표지)
+  const activeSeg=new Set(); C.filter(c=>c.rev[era]>0).forEach(c=>c.seg.forEach(s=>activeSeg.add(s)));
+  const a=gAnc.selectAll('g.anc').data(anchors,d=>d.id).join(en=>{
+    const g=en.append('g').attr('class','anc');
+    g.append('circle').attr('r',24).attr('fill','none').attr('stroke-dasharray','3 4');
+    g.append('circle').attr('r',3.2);
+    g.append('text').attr('class','anchor-l').attr('y',-30);
+    g.append('text').attr('class','anchor-s').attr('y',-18);
+    return g;
+  });
+  a.attr('transform',d=>`translate(${d._tx},${d._ty})`).attr('opacity',d=>activeSeg.has(d.seg)?1:0.22);
+  a.select('circle').attr('stroke',d=>activeSeg.has(d.seg)?'#33486b':'#1d2a40');
+  a.selectAll('circle').filter(function(){return this.getAttribute('r')==='3.2';}).attr('fill','#46597c');
+  a.select('.anchor-l').text(d=>SEG[d.seg].name).attr('fill',d=>activeSeg.has(d.seg)?'#c4d1e8':'#33425c');
+  a.select('.anchor-s').text(d=>SEG[d.seg].sub).attr('fill',d=>activeSeg.has(d.seg)?'#54627c':'#27344a');
+
+  // links
+  linkSel=gLink.selectAll('line').data(links,d=>d.id).join(
+    en=>en.append('line').attr('class','edge').attr('stroke',d=>d.col).attr('stroke-width',0.8).attr('stroke-opacity',0),
+    up=>up, ex=>ex.transition().duration(300).attr('stroke-opacity',0).remove());
+  linkSel.transition().duration(500).attr('stroke-opacity',0.14).attr('stroke',d=>d.col);
+
+  // nodes
+  nodeSel=gNode.selectAll('g.node').data(nodes,d=>d.id).join(
+    en=>{const g=en.append('g').attr('class','node').attr('opacity',0);
+      g.append('circle').attr('r',0).attr('fill',d=>TYPE[d.type].c).attr('fill-opacity',0.85).attr('stroke','#070d18').attr('stroke-width',1.3);
+      g.append('text').attr('class','clabel');
+      g.call(drag()).on('mouseenter',over).on('mousemove',move).on('mouseleave',out).on('click',(e,d)=>{e.stopPropagation();focus(d);});
+      return g;},
+    up=>up, ex=>ex.transition().duration(300).attr('opacity',0).remove());
+  nodeSel.transition().duration(550).attr('opacity',1);
+  nodeSel.select('circle').transition().duration(600)
+    .attr('r',d=>d._r).attr('fill',d=>TYPE[d.type].c)
+    .style('filter',d=>d._rev>=8?'drop-shadow(0 0 9px '+TYPE[d.type].c+'cc)':'drop-shadow(0 0 3px '+TYPE[d.type].c+'55)');
+  nodeSel.select('text').text(d=>d._name)
+    .attr('font-size',d=>d._r>=24?'12px':d._r>=13?'10px':'8.8px')
+    .attr('dy',d=>d._r+11).attr('fill','#d3def0')
+    .attr('opacity',d=>d._rev>=0.45?1:0); // 작은 노드는 호버 시 표시
+
+  sim.nodes(nodes.concat(anchors)); sim.force('link').links(links);
+  anchors.forEach(an=>{an.fx=an._tx;an.fy=an._ty;}); // 앵커 고정
+  sim.alpha(0.9).restart();
+  updateTelem();
+}
+
+function tick(){
+  linkSel.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+  nodeSel.attr('transform',d=>`translate(${d.x},${d.y})`);
+  gAnc.selectAll('g.anc').attr('transform',d=>`translate(${d.x},${d.y})`);
+}
+
+// ── 인터랙션 ──
+function neigh(d){const s=new Set([d.id]);
+  if(d.anchor){C.filter(c=>c.rev[era]>0&&c.seg.includes(d.seg)).forEach(c=>s.add(c.id));}
+  else{d.seg.forEach(sg=>s.add('SEG_'+sg));}
+  return s;}
+function over(e,d){if(highlight)return; emph(d); showTip(e,d);}
+function move(e){const t=document.getElementById('tip');t.style.left=Math.min(e.clientX+15,innerWidth-260)+'px';t.style.top=(e.clientY+15)+'px';}
+function out(){if(highlight)return; reset(); hideTip();}
+function emph(d){const nb=neigh(d);
+  nodeSel.select('circle').attr('opacity',n=>nb.has(n.id)?1:0.16);
+  nodeSel.select('text').attr('opacity',n=> (nb.has(n.id)||n._rev>=0.45)?(nb.has(n.id)?1:0.12):0);
+  linkSel.attr('stroke-opacity',l=>(l.source.id===d.id||l.target.id===d.id||(d.anchor&&l.target.id===d.id))?0.7:0.03);
+  gAnc.selectAll('g.anc').attr('opacity',n=>nb.has(n.id)?1:0.2);}
+function reset(){nodeSel.select('circle').attr('opacity',1);
+  nodeSel.select('text').attr('opacity',d=>d._rev>=0.45?1:0);
+  linkSel.attr('stroke-opacity',0.14);
+  const activeSeg=new Set();C.filter(c=>c.rev[era]>0).forEach(c=>c.seg.forEach(s=>activeSeg.add(s)));
+  gAnc.selectAll('g.anc').attr('opacity',d=>activeSeg.has(d.seg)?1:0.22);}
+function focus(d){if(highlight===d.id){highlight=null;reset();return;}highlight=d.id;emph(d);}
+svg.on('click',()=>{highlight=null;reset();});
+
+const tip=document.getElementById('tip');
+function showTip(e,d){
+  if(d.anchor){const list=C.filter(c=>c.rev[era]>0&&c.seg.includes(d.seg));
+    tip.innerHTML=`<div class="t"><i style="background:#46597c"></i>${SEG[d.seg].name} 영역</div>
+      <div class="row"><span>참여 기업</span><b>${list.length}개사</b></div>
+      <div class="d">${list.map(c=>c.name.split(' ')[0]).slice(0,8).join(', ')}${list.length>8?' …':''}</div>`;
+  }else{
+    const share=(d._rev/TOTAL*100);
+    tip.innerHTML=`<div class="t"><i style="background:${TYPE[d.type].c}"></i>${d._name}</div>
+      <div class="row"><span>우주 매출(추정)</span><b>$${d._rev.toFixed(d._rev<1?2:1)}B</b></div>
+      <div class="row"><span>매출 점유율</span><b>${share.toFixed(1)}%</b></div>
+      <div class="row"><span>유형</span><b style="color:${TYPE[d.type].c}">${TYPE[d.type].name}</b></div>
+      <div class="d">${d.d}</div>`;
+  }
+  tip.style.opacity=1;tip.style.transform='translateY(0)';move(e);
+}
+function hideTip(){tip.style.opacity=0;tip.style.transform='translateY(4px)';}
+
+function drag(){return d3.drag()
+  .on('start',(e,d)=>{if(!e.active)sim.alphaTarget(0.2).restart();d.fx=d.x;d.fy=d.y;})
+  .on('drag',(e,d)=>{d.fx=e.x;d.fy=e.y;})
+  .on('end',(e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;});}
+
+// ── 텔레메트리 ──
+function buildTelem(){
+  d3.select('#telem').selectAll('.cell').data(METRICS).join(en=>{
+    const c=en.append('div').attr('class','cell').style('--accent',d=>d.a);
+    c.append('div').attr('class','k').text(d=>d.k);
+    c.append('div').attr('class','v');
+    c.append('div').attr('class','u').text(d=>d.suf);
+    return c;});
+}
+let prevEra='n';
+function updateTelem(){
+  d3.select('#telem').selectAll('.cell').each(function(m){
+    const el=d3.select(this).select('.v').node();
+    const from=+(el.getAttribute('data-from')||m[prevEra]);
+    const to=m[era==='o'?'o':'n'];
+    const i=d3.interpolateNumber(from,to);
+    d3.select(this).select('.v').transition().duration(900).ease(d3.easeCubicOut).tween('t',()=>t=>{el.textContent=m.f(i(t));});
+    el.setAttribute('data-from',to);
+  });
+  prevEra=era;
+}
+
+// ── 레전드 ──
+const lg=d3.select('#legend');
+Object.values(TYPE).forEach(T=>{const el=lg.append('div').attr('class','lg');
+  el.append('i').style('background',T.c).style('color',T.c); el.append('span').text(T.name);});
+// 크기 범례
+const sk=d3.select('#sizekey'); sk.append('b').text('매출 규모:');
+[[1,'$1B'],[5,'$5B'],[15,'$15B']].forEach(([v,lab])=>{
+  const r=rOf(v); const box=sk.append('div').attr('class','sk');
+  const s=box.append('svg').attr('width',r*2+4).attr('height',r*2+4);
+  s.append('circle').attr('cx',r+2).attr('cy',r+2).attr('r',r).attr('fill','#5b6a82').attr('fill-opacity',0.35).attr('stroke','#5b6a82');
+  box.append('span').text(lab);
+});
+
+// ── 토글 ──
+d3.selectAll('.toggle button').on('click',function(){
+  const nx=this.dataset.era; if(nx===era)return; era=nx; highlight=null;
+  d3.selectAll('.toggle button').attr('aria-pressed',function(){return this.dataset.era===era;});
+  render();
+});
+
+// ── 초기화/리사이즈 ──
+function resize(){const r=svg.node().getBoundingClientRect();W=r.width;H=r.height;
+  ANC.forEach(a=>{const s=SEG[a.seg];a.fx=s.x*W;a.fy=s.y*H;}); render();}
+buildTelem();
+d3.selectAll('.toggle button').attr('aria-pressed',function(){return this.dataset.era===era;});
+window.addEventListener('resize',()=>{clearTimeout(window._rt);window._rt=setTimeout(resize,160);});
+const r0=svg.node().getBoundingClientRect();W=r0.width;H=r0.height;
+prevEra='o'; render(); // 2005→2025 카운트업
+</script>
+</body>
+</html>
