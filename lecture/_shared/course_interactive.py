@@ -1463,3 +1463,496 @@ def comparative_industries_heatmap():
     print("발사체(굵은 테두리)는 경제·안보·위신 세 렌즈 모두에서 높은 점수를 받는 유일한 산업입니다.")
     print("반도체·전투기는 안보 축에서, 조선·원자력은 경제·안보 결합에서 강하지만, 위신 축까지 모두 강한 것은")
     print("발사체가 유일합니다 — 슬라이드15가 '두 축이 동시에 작동하는 유일한 산업'이라 지목하는 이유입니다.")
+
+# ============================================================
+# 28. 스타십 반복시험(IFT) 캠페인 타임라인 (13주차 §PART1 TEST CAMPAIGN, 정적 다이어그램)
+# ============================================================
+def starship_test_campaign_timeline():
+    """2023년 IFT-1부터 2026년 IFT-12(V3)까지, 스타십의 반복시험(iterate-and-fly) 개발
+    캠페인이 실패를 데이터로 축적해 온 흐름을 보여준다 (정적 다이어그램 — 2026.7 기준)."""
+    events = [
+        ("2023\nIFT-1~2", "초기 실패기\n발사대 파손·단분리 실패\n(33기 동시점화 데이터 확보)", RED),
+        ("2024\nIFT-3~6", "이정표 달성기\n준궤도 재진입·인도양 연착수\n첫 부스터 타워 캐치 성공", AMBER),
+        ("2025\nIFT-7~11", "V2 성숙기\n블록2 상단·재비행 부스터\n성공·실패 혼재", AMBER),
+        ("2026.5\nIFT-12(V3)", "V3 진입기\n상단 상승 성공·궤도상 재점화 실패\n부스트백 실패", PRIMARY),
+        ("2026.7~\nFlight 13~14", "궤도 진입 시도\n(예고)\n'the big one'", GREEN),
+    ]
+    fig, ax = plt.subplots(figsize=(13, 3.8))
+    xs = list(range(len(events)))
+    ax.plot(xs, [0] * len(xs), color="#B0B0B0", linewidth=2, zorder=1)
+    for i, (x, (yr, label, color)) in enumerate(zip(xs, events)):
+        ax.scatter(x, 0, s=200, color=color, zorder=3, edgecolor="white", linewidth=1.5)
+        y_off = 22 if i % 2 == 0 else -22
+        va = "bottom" if i % 2 == 0 else "top"
+        ax.annotate(yr, (x, 0), fontsize=10, fontweight="bold", color=INK,
+                    xytext=(0, y_off), textcoords="offset points", ha="center", va=va)
+        ax.annotate(label, (x, 0), fontsize=7.8, color=INK_MUTED,
+                    xytext=(0, y_off + (16 if i % 2 == 0 else -16)), textcoords="offset points",
+                    ha="center", va=va)
+    ax.set_xlim(-0.5, len(xs) - 0.5)
+    ax.set_ylim(-2.2, 2.2)
+    ax.axis("off")
+    ax.set_title("스타십 반복시험(Iterate-and-Fly) 캠페인 — 12회 비행, 아직 완전 궤도 비행은 없음(2026.7 기준)",
+                  fontsize=11.5, color=INK, pad=8)
+    plt.tight_layout()
+    plt.show()
+    print("전통적 개발이라면 용납되지 않았을 실패들이 설계 수정의 원료가 되는 것이 반복시험 방법론의 핵심입니다.")
+    print("2026.7 현재까지 12회 비행 모두 준궤도 프로파일 — 완전한 궤도 비행은 아직 실증되지 않았습니다.")
+
+
+# ============================================================
+# 29. 스타십 재사용 횟수별 $/kg 탐색기 (13주차 §PART2 COST DISCONTINUITY)
+# ============================================================
+def _plot_starship_reuse_cost(reuse_count):
+    n_grid = np.linspace(1, 70, 200)
+    cost_grid = 280 * n_grid ** (-0.6325)
+    cost_sel = 280 * reuse_count ** (-0.6325)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.6))
+
+    ax = axes[0]
+    ax.plot(n_grid, cost_grid, color=PRIMARY, linewidth=2.4, zorder=3)
+    ax.axvspan(6, 6, color=AMBER, alpha=0)
+    ax.axhspan(78, 94, color=AMBER, alpha=0.12, zorder=0)
+    ax.annotate("부분재사용(6회)\n$78~94/kg", xy=(9, 88), fontsize=8, color=AMBER)
+    ax.axhspan(13, 32, color=GREEN, alpha=0.12, zorder=0)
+    ax.annotate("고재사용(20~70회)\n$13~32/kg", xy=(30, 40), fontsize=8, color=GREEN)
+    ax.plot(reuse_count, cost_sel, "o", color=RED, markersize=11, zorder=5)
+    ax.set_yscale("log")
+    ax.set_facecolor("white")
+    for s in ["top", "right"]:
+        ax.spines[s].set_visible(False)
+    ax.grid(True, color=GRID, linewidth=0.8, zorder=0)
+    ax.set_xlabel("동일 기체 누적 재사용 횟수")
+    ax.set_ylabel("$/kg (로그축, 원가 추정)")
+    ax.set_title(f"재사용 {reuse_count:.0f}회 시 원가 ≈ ${cost_sel:.0f}/kg")
+
+    ax = axes[1]
+    gens = ["우주왕복선\n(STS)", "Falcon 9\n(재사용)", f"Starship\n({reuse_count:.0f}회 재사용)"]
+    vals = [55000, 2700, cost_sel]
+    colors = ["#8B5E3C", PRIMARY, RED]
+    bars = ax.bar(gens, vals, color=colors, width=0.55, zorder=3)
+    ax.set_yscale("log")
+    for rect, v in zip(bars, vals):
+        ax.annotate(f"${v:,.0f}/kg", (rect.get_x() + rect.get_width() / 2, v), fontsize=9,
+                    ha="center", va="bottom", fontweight="bold", color=INK)
+    ax.set_facecolor("white")
+    for s in ["top", "right"]:
+        ax.spines[s].set_visible(False)
+    ax.grid(True, axis="y", color=GRID, linewidth=0.8, zorder=0)
+    ax.set_ylabel("$/kg (로그축)")
+    ax.set_title("세대 간 격차는 '배수'가 아니라 '자릿수'")
+
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[재사용 {reuse_count:.0f}회] 원가 추정 ≈ ${cost_sel:.0f}/kg (설계상 잠재력 — 실증 전 목표치)")
+    print(f"  우주왕복선(STS) 대비 약 {55000/cost_sel:,.0f}배, Falcon 9(재사용) 대비 약 {2700/cost_sel:,.0f}배 낮은 원가 수준입니다.")
+    print("  주의: 원가와 '가격'은 별개입니다 — 성숙기 회당 가격은 $10M 이하 목표로 제시되는데, 이는 원가가 아니라")
+    print("  시장지배력에 따른 마진의 함수입니다(12주차 PpF 논리). 모든 수치는 실증 전 추정치로 다룰 것.")
+
+
+def starship_reuse_cost_explorer():
+    """스타십의 $/kg 원가가 동일 기체의 누적 재사용 횟수에 따라 어떻게 하락하는지,
+    그리고 그 하락이 이전 세대 발사체 대비 얼마나 '자릿수' 단위의 격차를 만드는지 확인한다.
+    (모든 수치는 강의 슬라이드8 추정치에 기반한 설계상 잠재력 — 실증 전 값)"""
+    interact(_plot_starship_reuse_cost,
+             reuse_count=FloatSlider(value=6, min=1, max=70, step=1,
+                                      description="재사용 횟수",
+                                      style={"description_width": "120px"}, layout={"width": "480px"}))
+
+
+# ============================================================
+# 30. 궤도 급유 탱커 발사 횟수 계산기 (13주차 §PART1 ORBITAL REFILLING)
+# ============================================================
+def _plot_orbital_refueling(target_prop_t, tanker_delivered_t, boiloff_loss_pct):
+    effective_per_flight = tanker_delivered_t * (1 - boiloff_loss_pct / 100)
+    n_flights = int(np.ceil(target_prop_t / max(effective_per_flight, 1)))
+
+    loss_grid = np.linspace(0, 30, 100)
+    eff_grid = tanker_delivered_t * (1 - loss_grid / 100)
+    n_grid = np.ceil(target_prop_t / np.maximum(eff_grid, 1))
+
+    fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.4))
+
+    ax = axes[0]
+    labels = [f"탱커 #{i+1}" for i in range(min(n_flights, 15))]
+    vals = [effective_per_flight] * min(n_flights, 15)
+    ax.bar(labels, vals, color=PRIMARY, width=0.6, zorder=3)
+    ax.set_facecolor("white")
+    for s in ["top", "right"]:
+        ax.spines[s].set_visible(False)
+    ax.grid(True, axis="y", color=GRID, linewidth=0.8, zorder=0)
+    ax.tick_params(axis="x", labelrotation=60, labelsize=7)
+    ax.set_ylabel("선체당 실질 이송량(t)")
+    extra = f" (총 {n_flights}회 중 15회만 표시)" if n_flights > 15 else ""
+    ax.set_title(f"필요 탱커 발사 횟수 = {n_flights}회{extra}")
+
+    ax = axes[1]
+    ax.plot(loss_grid, n_grid, color=RED, linewidth=2.2, zorder=3)
+    ax.plot(boiloff_loss_pct, n_flights, "o", color=RED, markersize=10, zorder=5)
+    ax.set_facecolor("white")
+    for s in ["top", "right"]:
+        ax.spines[s].set_visible(False)
+    ax.grid(True, color=GRID, linewidth=0.8, zorder=0)
+    ax.set_xlabel("극저온 추진제 손실률(boil-off, %)")
+    ax.set_ylabel("필요 탱커 발사 횟수")
+    ax.set_title("손실률이 커질수록 탱커 왕복이 급증")
+
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[입력] 목표 추진제량={target_prop_t:.0f}t, 탱커 1회당 이송량={tanker_delivered_t:.0f}t, "
+          f"boil-off 손실률={boiloff_loss_pct:.0f}%")
+    print(f"[산출] 선체당 실질 이송량 = {effective_per_flight:.1f}t → 필요 탱커 발사 횟수 = {n_flights}회")
+    print("  → 슬라이드7의 'HLS 기준 약 10회'는 손실률이 낮고 이송량이 큰 낙관적 가정에 해당합니다.")
+    print("  → boil-off 손실률이 커질수록 필요 탱커 횟수가 비선형적으로 늘어나며, 이것이 궤도 급유가")
+    print("  '미시연 상태에서 가장 큰 일정 리스크'로 꼽히는 이유입니다 (슬라이드11 회의론자의 장부).")
+
+
+def orbital_refueling_calculator():
+    """목표 추진제량·탱커 1회당 이송량·극저온 boil-off 손실률을 조작해, 달·화성급 임무에
+    필요한 궤도상 탱커 발사 횟수가 어떻게 달라지는지 확인한다."""
+    interact(_plot_orbital_refueling,
+             target_prop_t=FloatSlider(value=1200, min=500, max=2000, step=100,
+                                        description="목표 추진제량(t)",
+                                        style={"description_width": "130px"}, layout={"width": "460px"}),
+             tanker_delivered_t=FloatSlider(value=120, min=50, max=200, step=10,
+                                             description="탱커 1회당 이송량(t)",
+                                             style={"description_width": "130px"}, layout={"width": "460px"}),
+             boiloff_loss_pct=FloatSlider(value=10, min=0, max=30, step=2,
+                                           description="Boil-off 손실률(%)",
+                                           style={"description_width": "130px"}, layout={"width": "460px"}))
+
+
+# ============================================================
+# 31. 스타십 시나리오 스트레스 테스트 (13주차 WORKSHOP 연계)
+# ============================================================
+def _plot_scenario_stress_test(team_price_per_kg, scenario):
+    if scenario == "A: 성숙 (2030)":
+        band_low, band_high = 50, 150
+        color = GREEN
+    else:
+        band_low, band_high = 1500, 3000
+        color = RED
+
+    fig, ax = plt.subplots(figsize=(8.5, 4.6))
+    ax.axhspan(band_low, band_high, color=color, alpha=0.15, zorder=0)
+    ax.annotate(f"스타십 시나리오 가격대\n${band_low:,}~{band_high:,}/kg", xy=(0.5, (band_low + band_high) / 2),
+                fontsize=9, color=color, ha="center", fontweight="bold")
+    ax.axhline(team_price_per_kg, color=INK, linewidth=2.4, zorder=3)
+    ax.annotate(f"우리 팀 벤치마크\n${team_price_per_kg:,.0f}/kg", xy=(0.5, team_price_per_kg),
+                fontsize=9, color=INK, ha="center", va="bottom", fontweight="bold",
+                xytext=(0, 8), textcoords="offset points")
+    ax.set_xlim(0, 1)
+    ax.set_xticks([])
+    ax.set_yscale("log")
+    ax.set_ylabel("$/kg (로그축)")
+    ax.set_facecolor("white")
+    for s in ["top", "right"]:
+        ax.spines[s].set_visible(False)
+    ax.grid(True, axis="y", color=GRID, linewidth=0.8, zorder=0)
+    ax.set_title(f"우리 팀 가격 벤치마크 vs 스타십 {scenario}")
+    plt.tight_layout()
+    plt.show()
+
+    if team_price_per_kg > band_high:
+        verdict = "우리 팀 가격이 스타십 가격대보다 확연히 높습니다 — 정면경쟁 대신 스타십이 못 주는 가치(궤도·일정·안보 요건 등)에서 차별화가 필요합니다."
+    elif team_price_per_kg < band_low:
+        verdict = "우리 팀 가격이 스타십 가격대보다 낮습니다 — 비현실적인 가정이 아닌지 원가구조(12주차 M4)를 재점검할 필요가 있습니다."
+    else:
+        verdict = "우리 팀 가격이 스타십 가격대와 겹칩니다 — 정면경쟁 구간이므로 차별화 요소가 없다면 시장에서 밀릴 위험이 큽니다."
+
+    print(f"[시나리오] {scenario} — 가격대 ${band_low:,}~{band_high:,}/kg")
+    print(f"[우리 팀] ${team_price_per_kg:,.0f}/kg")
+    print(f"  → {verdict}")
+
+
+def scenario_stress_test_explorer():
+    """우리 팀의 발사서비스 가격 벤치마크를, 스타십 '성숙(A)' 또는 '지연(B)' 시나리오의
+    예상 가격대와 비교해 생존 가능성을 점검한다 — 워크숍(보고서 ⑥ 리스크 분석) 연계 도구."""
+    interact(_plot_scenario_stress_test,
+             team_price_per_kg=FloatSlider(value=2500, min=50, max=5000, step=50,
+                                            description="우리 팀 가격($/kg)",
+                                            style={"description_width": "130px"}, layout={"width": "460px"}),
+             scenario=Dropdown(options=["A: 성숙 (2030)", "B: 지연 (2030)"],
+                                description="시나리오",
+                                style={"description_width": "80px"}))
+
+# ============================================================
+# 32. 비즈니스 모델 캔버스(BMC) 뷰어 (11주차 §CASE STUDIES, 3사 비교)
+# ============================================================
+_BMC_DATA = {
+    "SpaceX": {
+        "flag": False,
+        "blocks": {
+            "핵심 파트너": "NASA(COTS/CRS)\n美 국방부(NSSL)\nFAA",
+            "핵심 활동": "설계·제작·발사\n전과정 내재화\n재사용 회수·정비",
+            "핵심 자원": "Merlin/Raptor 엔진\n재사용 Falcon 9 함대\n자체 발사장",
+            "가치 제안": "압도적 저가($/kg)\n높은 빈도·일정신뢰성\n재사용 실증 신뢰도",
+            "고객 관계": "장기 대량계약\n온라인 예약(라이드셰어)",
+            "채널": "직판·정부조달\nTransporter 웹예약",
+            "고객 세그먼트": "NASA·국방부\n상업 위성사업자\n군집운영사·Starlink",
+            "비용 구조": "개발비 + 대량생산 고정비\n발사운영비 — 학습곡선 하락",
+            "수익원": "발사서비스 대금\n정부계약, Starlink 매출",
+        },
+    },
+    "Rocket Lab": {
+        "flag": False,
+        "blocks": {
+            "핵심 파트너": "NASA·美 우주군\n뉴질랜드/美 정부\n위성부품 피인수기업",
+            "핵심 활동": "Electron 전용발사\nNeutron 개발\n위성버스 제조",
+            "핵심 자원": "마히아 발사장\nRutherford 엔진\nPhoton 플랫폼",
+            "가치 제안": "맞춤 궤도·일정\n원스톱 위성제작(End-to-end)",
+            "고객 관계": "임무단위 밀착관리\n정부 장기 프로그램",
+            "채널": "직판·정부조달\n우주시스템 교차판매",
+            "고객 세그먼트": "소형위성 상업사\n美 정부·군\n위성제작 고객",
+            "비용 구조": "Electron 생산·운영비\n($/kg 열위) + Neutron 개발비",
+            "수익원": "전용발사(프리미엄)\n위성시스템 매출(다수 차지)",
+        },
+    },
+    "Virgin Orbit (파산, 2023)": {
+        "flag": True,
+        "blocks": {
+            "핵심 파트너": "Virgin 그룹\n보잉 747 개조 파트너",
+            "핵심 활동": "공중발사\nLauncherOne",
+            "핵심 자원": "개조 747 '코스믹 걸'\n공중발사 기술",
+            "가치 제안": "'어디서든 발사' 유연성\n→ 시장은 결국 '싼 가격' 원함",
+            "고객 관계": "건별 임무 계약",
+            "채널": "직판·정부 영업",
+            "고객 세그먼트": "소형위성 운영사\n자국발사 희망국\n→ 라이드셰어와 중복",
+            "비용 구조": "항공기+로켓 이중구조\n저빈도(총 6회) 간접비 회수 불능",
+            "수익원": "매출 미미(누적손실 >$10억)\n→ 2023년 파산",
+        },
+        "weak_blocks": {"가치 제안", "고객 세그먼트", "비용 구조", "수익원"},
+    },
+}
+
+
+def _draw_bmc_block(ax, x, y, w, h, title, text, weak=False):
+    face = "#FCEBD5" if weak else "#F5F5F5"
+    edge = AMBER if weak else "#B0B0B0"
+    ax.add_patch(plt.Rectangle((x, y), w, h, facecolor=face, edgecolor=edge, linewidth=1.6, zorder=2))
+    ax.text(x + w / 2, y + h - 0.05, title, fontsize=8.5, fontweight="bold", color=INK,
+            ha="center", va="top", zorder=3)
+    ax.text(x + w / 2, y + h / 2 - 0.06, text, fontsize=6.8, color=INK_MUTED,
+            ha="center", va="center", zorder=3, linespacing=1.4)
+
+
+def _plot_bmc_canvas(company):
+    data = _BMC_DATA[company]
+    blocks = data["blocks"]
+    weak = data.get("weak_blocks", set())
+
+    fig, ax = plt.subplots(figsize=(13, 6.6))
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, 6)
+    ax.axis("off")
+
+    col_w = 2.0
+    left_x = 0
+    center_x = 2 * col_w
+    right_x = 5 * col_w
+    top_h = 4.0
+    row_h = top_h / 3
+
+    left_titles = ["핵심 파트너", "핵심 활동", "핵심 자원"]
+    for i, t in enumerate(left_titles):
+        y = top_h - row_h * (i + 1)
+        _draw_bmc_block(ax, left_x, y, col_w, row_h, t, blocks[t], t in weak)
+
+    _draw_bmc_block(ax, center_x, 0, col_w * 3, top_h, "가치 제안", blocks["가치 제안"], "가치 제안" in weak)
+
+    right_titles = ["고객 관계", "채널", "고객 세그먼트"]
+    for i, t in enumerate(right_titles):
+        y = top_h - row_h * (i + 1)
+        _draw_bmc_block(ax, right_x, y, col_w, row_h, t, blocks[t], t in weak)
+
+    bottom_h = 6 - top_h - 0.15
+    _draw_bmc_block(ax, 0, top_h + 0.15, col_w * 4, bottom_h, "비용 구조", blocks["비용 구조"], "비용 구조" in weak)
+    _draw_bmc_block(ax, col_w * 4, top_h + 0.15, col_w * 4, bottom_h, "수익원", blocks["수익원"], "수익원" in weak)
+
+    title_suffix = " — 주황색 = 실패의 구조적 원인" if data["flag"] else ""
+    ax.set_title(f"{company} — 비즈니스 모델 캔버스{title_suffix}", fontsize=13, color=INK, pad=10)
+    plt.tight_layout()
+    plt.show()
+
+    if data["flag"]:
+        print("가치제안이 고객의 실제 구매기준(가격)과 어긋났고, 고객층은 라이드셰어와 겹쳤으며,")
+        print("비용구조는 이중으로 무거웠습니다 — 세 블록의 동시 실패가 파산으로 이어진 구조입니다.")
+    else:
+        print(f"{company}는 오른쪽(시장) 블록과 왼쪽(역량) 블록이 서로를 강화하는 정합적 구조를 보여줍니다.")
+
+
+def bmc_canvas_viewer():
+    """SpaceX·Rocket Lab·Virgin Orbit 세 기업의 비즈니스 모델 캔버스(9블록)를 선택해
+    나란히 비교한다. Virgin Orbit은 실패로 이어진 취약 블록이 주황색으로 표시된다."""
+    interact(_plot_bmc_canvas,
+             company=Dropdown(options=list(_BMC_DATA.keys()), description="기업 선택",
+                               style={"description_width": "80px"}, layout={"width": "320px"}))
+
+
+# ============================================================
+# 33. 단위경제·손익분기 발사횟수 탐색기 (11주차 §UNIT ECONOMICS)
+# ============================================================
+def _plot_breakeven(dev_musd, man1_musd, ops1_musd, learning_rate_pct, price_per_flight_musd):
+    b = np.log2(learning_rate_pct / 100)
+    n = np.arange(1, 201)
+    unit_cost = (man1_musd + ops1_musd) * n.astype(float) ** b
+    cpf = dev_musd / n + unit_cost
+    margin_per_flight = price_per_flight_musd - cpf
+
+    cumulative_cost = dev_musd + np.cumsum(unit_cost)
+    cumulative_revenue = n * price_per_flight_musd
+    cumulative_margin = cumulative_revenue - cumulative_cost
+
+    breakeven_idx = np.argmax(cumulative_margin >= 0) if np.any(cumulative_margin >= 0) else -1
+    na_star = n[breakeven_idx] if breakeven_idx >= 0 else None
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.6))
+
+    ax = axes[0]
+    ax.plot(n, cpf, color=RED, linewidth=2.2, label="발사당 원가 CpF(n)", zorder=3)
+    ax.axhline(price_per_flight_musd, color=PRIMARY, linewidth=2, linestyle="--", label="발사가 PpF", zorder=3)
+    ax.fill_between(n, cpf, price_per_flight_musd, where=(cpf < price_per_flight_musd),
+                     color=GREEN, alpha=0.12, zorder=1)
+    ax.set_facecolor("white")
+    for s in ["top", "right"]:
+        ax.spines[s].set_visible(False)
+    ax.grid(True, color=GRID, linewidth=0.8, zorder=0)
+    ax.set_xlabel("누적 발사(생산) 횟수 n")
+    ax.set_ylabel("$M")
+    ax.set_title("발사당 원가 CpF가 가격 PpF 아래로 내려오는 시점")
+    ax.legend(fontsize=8.5, frameon=False)
+
+    ax = axes[1]
+    ax.plot(n, cumulative_margin, color=PRIMARY, linewidth=2.2, zorder=3)
+    ax.axhline(0, color=INK_MUTED, linestyle=":", linewidth=1.2)
+    if na_star is not None:
+        ax.plot(na_star, cumulative_margin[breakeven_idx], "o", color=RED, markersize=11, zorder=5)
+        ax.annotate(f"Na*≈{na_star}회", (na_star, cumulative_margin[breakeven_idx]), fontsize=9,
+                    color=RED, xytext=(8, 10), textcoords="offset points", fontweight="bold")
+    ax.set_facecolor("white")
+    for s in ["top", "right"]:
+        ax.spines[s].set_visible(False)
+    ax.grid(True, color=GRID, linewidth=0.8, zorder=0)
+    ax.set_xlabel("누적 발사(생산) 횟수 n")
+    ax.set_ylabel("누적 손익($M)")
+    ax.set_title("손익분기 발사횟수 Na*")
+
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[입력] 개발비 DEV=${dev_musd:.0f}M, 초기 생산비 MAN1=${man1_musd:.0f}M, 초기 운영비 OPS1=${ops1_musd:.0f}M, "
+          f"학습률={learning_rate_pct:.0f}%, 발사가 PpF=${price_per_flight_musd:.0f}M")
+    if na_star is not None:
+        print(f"[산출] 손익분기 발사횟수 Na* ≈ {na_star}회 — 이 횟수를 넘어서면 누적으로 흑자 전환됩니다.")
+    else:
+        print("[산출] 200회 이내에서 손익분기에 도달하지 못합니다 — 가격을 올리거나 개발비·학습률을 개선해야 합니다.")
+    print("  → 학습률(%)을 낮추면(더 가파른 학습곡선) 원가 하락이 빨라져 Na*가 앞당겨집니다 — 슬라이드11이")
+    print("  강조하는 '학습곡선·LpA 효과를 반영해 Na*가 앞당겨지는 논리'가 바로 이 메커니즘입니다.")
+    print("  주의: 이는 12주차 TRANSCOST 정식 모형의 단순화된 근사입니다 — 세부 CER은 12주차에서 다룹니다.")
+
+
+def unit_economics_breakeven_explorer():
+    """발사 1회 마진 = PpF - CpF, CpF = DEV/n + MANₙ + OPSₙ 구조에서, 개발비·초기 생산비·
+    학습률·발사가를 직접 조작해 손익분기 발사횟수 Na*가 어떻게 달라지는지 확인한다."""
+    interact(_plot_breakeven,
+             dev_musd=FloatSlider(value=400, min=100, max=1000, step=50,
+                                   description="개발비 DEV($M)",
+                                   style={"description_width": "140px"}, layout={"width": "460px"}),
+             man1_musd=FloatSlider(value=15, min=5, max=30, step=1,
+                                    description="초기 생산비 MAN1($M)",
+                                    style={"description_width": "140px"}, layout={"width": "460px"}),
+             ops1_musd=FloatSlider(value=5, min=2, max=15, step=1,
+                                    description="초기 운영비 OPS1($M)",
+                                    style={"description_width": "140px"}, layout={"width": "460px"}),
+             learning_rate_pct=FloatSlider(value=85, min=75, max=95, step=1,
+                                            description="학습률(%)",
+                                            style={"description_width": "140px"}, layout={"width": "460px"}),
+             price_per_flight_musd=FloatSlider(value=30, min=10, max=80, step=5,
+                                                description="발사가 PpF($M)",
+                                                style={"description_width": "140px"}, layout={"width": "460px"}))
+
+
+# ============================================================
+# 34. 번레이트·활주로(runway) 계산기 (11주차 §UNIT ECONOMICS 현금흐름)
+# ============================================================
+def _plot_runway(cash_on_hand_musd, monthly_burn_musd, milestone_months):
+    runway_months = cash_on_hand_musd / max(monthly_burn_musd, 0.1)
+
+    fig, ax = plt.subplots(figsize=(9, 4.2))
+    ax.barh(["활주로(runway)"], [runway_months], color=PRIMARY if runway_months >= milestone_months else RED,
+            height=0.4, zorder=3)
+    ax.axvline(milestone_months, color=AMBER, linewidth=2.2, linestyle="--", zorder=4)
+    ax.annotate(f"다음 마일스톤까지\n{milestone_months:.0f}개월", xy=(milestone_months, 0.6),
+                fontsize=9, color=AMBER, ha="center", fontweight="bold")
+    ax.annotate(f"{runway_months:.1f}개월", xy=(runway_months, 0), fontsize=11,
+                ha="left" if runway_months < milestone_months else "right",
+                va="center", color=INK, fontweight="bold",
+                xytext=(6, 0), textcoords="offset points")
+    ax.set_facecolor("white")
+    for s in ["top", "right"]:
+        ax.spines[s].set_visible(False)
+    ax.grid(True, axis="x", color=GRID, linewidth=0.8, zorder=0)
+    ax.set_xlabel("개월")
+    ax.set_xlim(0, max(runway_months, milestone_months) * 1.3)
+    ax.set_title("보유현금 활주로 vs 다음 자금조달 마일스톤까지 필요 기간")
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[입력] 보유현금=${cash_on_hand_musd:.0f}M, 월 소진율(burn rate)=${monthly_burn_musd:.1f}M/월, "
+          f"다음 마일스톤까지={milestone_months:.0f}개월")
+    print(f"[산출] 활주로 = {runway_months:.1f}개월")
+    if runway_months >= milestone_months:
+        print(f"  → 활주로가 마일스톤 도달 기간보다 {runway_months - milestone_months:.1f}개월 여유가 있습니다 — 생존 가능 구간입니다.")
+    else:
+        print(f"  → 활주로가 마일스톤 도달 기간보다 {milestone_months - runway_months:.1f}개월 부족합니다 — 자금경색(cash crunch) 위험입니다.")
+        print("  → 번레이트를 줄이거나, 마일스톤 이전에 브릿지 투자·선수금 확보가 필요합니다.")
+
+
+def funding_runway_calculator():
+    """보유현금과 월간 현금소진율(burn rate)로 활주로(runway)를 계산하고,
+    다음 기술·자금조달 마일스톤까지 생존 가능한지 점검한다."""
+    interact(_plot_runway,
+             cash_on_hand_musd=FloatSlider(value=80, min=10, max=300, step=10,
+                                            description="보유현금($M)",
+                                            style={"description_width": "140px"}, layout={"width": "460px"}),
+             monthly_burn_musd=FloatSlider(value=6, min=1, max=25, step=1,
+                                            description="월 소진율($M/월)",
+                                            style={"description_width": "140px"}, layout={"width": "460px"}),
+             milestone_months=FloatSlider(value=14, min=6, max=36, step=2,
+                                           description="마일스톤까지(개월)",
+                                           style={"description_width": "140px"}, layout={"width": "460px"}))
+
+
+# ============================================================
+# 35. 자금조달 여정 사다리 (11주차 §FUNDING JOURNEY, 정적 다이어그램)
+# ============================================================
+def funding_journey_ladder():
+    """VC·엔젤 투자에서 정부 앵커계약, 상장을 거쳐 영업현금흐름 자립까지, 발사체 기업의
+    4단계 자금조달 여정과 각 단계의 전환 조건을 보여준다 (정적 다이어그램)."""
+    stages = [
+        ("1단계", "VC·엔젤 투자", "개념설계~엔진 시제품\n기술 스토리와 팀으로 조달", INK_MUTED),
+        ("2단계", "정부 앵커계약", "COTS형 마일스톤 계약\n'정부가 첫 고객' 신용 획득", PRIMARY),
+        ("3단계", "상장(IPO/SPAC)", "대규모 자본 조달\n※ 2021 SPAC 붐 다수 몰락", AMBER),
+        ("4단계", "영업현금흐름 자립", "백로그 기반 안정 매출\n흑자 전환 — 극소수만 도달", GREEN),
+    ]
+    fig, ax = plt.subplots(figsize=(12, 3.8))
+    xs = list(range(len(stages)))
+    ax.plot(xs, [0] * len(xs), color="#B0B0B0", linewidth=2, zorder=1)
+    for x, (num, label, detail, color) in zip(xs, stages):
+        ax.scatter(x, 0, s=220, color=color, zorder=3, edgecolor="white", linewidth=1.5)
+        ax.annotate(f"{num}\n{label}", (x, 0), fontsize=10, fontweight="bold", color=INK,
+                    xytext=(0, 22), textcoords="offset points", ha="center")
+        ax.annotate(detail, (x, 0), fontsize=7.6, color=INK_MUTED,
+                    xytext=(0, -26), textcoords="offset points", ha="center", va="top")
+    ax.set_xlim(-0.5, len(xs) - 0.5)
+    ax.set_ylim(-1.6, 1.6)
+    ax.axis("off")
+    ax.set_title("발사체 기업의 자금조달 여정 — 각 단계 전환의 조건은 '기술 마일스톤 달성'",
+                  fontsize=12, color=INK, pad=8)
+    plt.tight_layout()
+    plt.show()
+    print("엔진 연소시험 성공 → 시리즈 투자, 궤도 도달 → 정부계약 자격, 상업발사 연속 성공 → 상장·대형계약.")
+    print("자금조달 계획 없는 개발일정은 공상이고, 기술 마일스톤 없는 자금계획은 공수표입니다.")
