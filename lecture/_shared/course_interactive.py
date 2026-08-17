@@ -571,3 +571,125 @@ def cost_per_kg_ladder():
     """발사체 세대를 선택해 $/kg이 어떻게 하락해 왔는지 비교한다."""
     interact(_plot_cost_ladder, highlight=Dropdown(options=[c[0] for c in _COST_LADDER],
                                                     description="비교 대상", style={"description_width": "80px"}))
+
+
+# ============================================================
+# 12. 몬테카를로 위험비교 탐색기 (5주차 §SSTO/TSTO 방법론, Greenberg Ch.4 §VI)
+# ============================================================
+def _plot_monte_carlo_risk(perf_uncertainty_pct, cost_sensitivity, n_sim):
+    rng = np.random.default_rng(42)
+    # ① 달성 성능(설계점=100 기준, %) 표본추출 — 정규분포 후 [70,115]로 절단(최소허용~설계점 초과 캡)
+    perf = rng.normal(100, perf_uncertainty_pct, n_sim)
+    perf = np.clip(perf, 70, 115)
+
+    # ② 설계점 미달분(shortfall)이 클수록 탑재체 여유 축소 → 비용 급증 (2차 다항식 민감도, 슬라이드8)
+    shortfall = np.clip(100 - perf, 0, None)
+    cost_multiplier = 1.0 + cost_sensitivity * (shortfall / 20) ** 2
+    base_cost = 100.0  # 임의단위(억원) — 실제 설계평가 수치 아님
+    pvlcc = base_cost * cost_multiplier
+
+    m = pvlcc.mean()
+    sigma = pvlcc.std()
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.3))
+
+    ax = axes[0]
+    ax.hist(perf, bins=30, color=PRIMARY, alpha=0.85, zorder=3)
+    _style(ax)
+    ax.axvline(100, color=INK_MUTED, linestyle="--", linewidth=1)
+    ax.set_xlabel("달성 성능 (설계점=100 기준, %)")
+    ax.set_ylabel("빈도")
+    ax.set_title("① 성능 표본분포 (Monte Carlo)")
+
+    ax = axes[1]
+    ax.hist(pvlcc, bins=30, color=AMBER, alpha=0.85, zorder=3)
+    _style(ax)
+    ax.axvline(m, color=RED, linewidth=2, label=f"m = {m:.1f}")
+    ax.axvline(m + sigma, color=RED, linestyle="--", linewidth=1, label=f"m±σ = {sigma:.1f}")
+    ax.axvline(m - sigma, color=RED, linestyle="--", linewidth=1)
+    ax.set_xlabel("생애주기비용 현재가치 PVLCC (임의단위)")
+    ax.set_ylabel("빈도")
+    ax.set_title("② 비용 사후분포 → (m, σ) 산출")
+    ax.legend(fontsize=8, frameon=False)
+
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[{n_sim:,}회 반복]")
+    print(f"  기대비용(m)  = {m:.2f}")
+    print(f"  표준편차(σ)  = {sigma:.2f}   (변동계수 σ/m = {sigma/m:.1%})")
+    print("  → 성능 불확실성이 클수록, 비용민감도계수가 클수록 σ(위험)가 커집니다.")
+    print("  → 이 (m, σ) 한 쌍이 아키텍처 간 위험-기댓값 비교의 기본 단위입니다.")
+
+
+def monte_carlo_risk_explorer():
+    """SSTO/TSTO 방법론의 핵심인 몬테카를로 절차를 직접 실행 — 성능 불확실성·비용민감도를 바꿔가며
+    (m, σ)가 어떻게 달라지는지 확인한다."""
+    interact(_plot_monte_carlo_risk,
+             perf_uncertainty_pct=FloatSlider(value=8, min=1, max=20, step=1,
+                                               description="성능 불확실성(%p)",
+                                               style={"description_width": "120px"}, layout={"width": "480px"}),
+             cost_sensitivity=FloatSlider(value=1.5, min=0.2, max=4.0, step=0.1,
+                                           description="비용 민감도계수",
+                                           style={"description_width": "120px"}, layout={"width": "480px"}),
+             n_sim=IntSlider(value=2000, min=200, max=5000, step=200,
+                              description="반복횟수(MAXR)",
+                              style={"description_width": "120px"}, layout={"width": "480px"}))
+
+
+# ============================================================
+# 13. (m, σ) 위험-기댓값 프론티어 탐색기 (5주차 §DECISION FRAME)
+# ============================================================
+_ARCHITECTURES = {
+    "기존/개량 ELV": (100, 8, INK_MUTED),
+    "TSTO": (85, 22, PRIMARY),
+    "SSTO": (72, 35, AMBER),
+    "HRST(마그레브, 참고용)": (60, 30, PURPLE),
+}
+
+
+def _plot_risk_frontier(highlight, show_frontier):
+    fig, ax = plt.subplots(figsize=(7.5, 6))
+
+    pts = list(_ARCHITECTURES.items())
+    for name, (m, s, c) in pts:
+        color = c if name == highlight else "#D9D9D9"
+        size = 220 if name == highlight else 140
+        ax.scatter(m, s, s=size, color=color, zorder=4, edgecolor="white", linewidth=1.2)
+        ax.annotate(name, (m, s), fontsize=9, color=INK,
+                    xytext=(8, 8), textcoords="offset points",
+                    fontweight="bold" if name == highlight else "normal")
+
+    if show_frontier:
+        # 지배되지 않는 점(더 낮은 m에서 더 낮은 σ가 없는 점)을 m 오름차순으로 찾아 프론티어 구성
+        sorted_pts = sorted(pts, key=lambda kv: kv[1][0])
+        frontier = []
+        min_sigma_so_far = float("inf")
+        for name, (m, s, c) in sorted_pts:
+            if s < min_sigma_so_far:
+                frontier.append((m, s))
+                min_sigma_so_far = s
+        fx = [p[0] for p in frontier]
+        fy = [p[1] for p in frontier]
+        ax.plot(fx, fy, "--", color=GREEN, linewidth=1.6, zorder=2, label="최적 대안 프론티어")
+        ax.legend(fontsize=9, frameon=False, loc="upper right")
+
+    _style(ax)
+    ax.set_xlabel("기대현재가치비용 m (임의단위 — 왼쪽일수록 비용 낮음)")
+    ax.set_ylabel("표준편차 σ (위험 — 아래쪽일수록 위험 낮음)")
+    ax.set_title(f"위험-기댓값 평면 — 선택: {highlight}  (좌하단이 우월)")
+    plt.tight_layout()
+    plt.show()
+
+    m, s, _ = _ARCHITECTURES[highlight]
+    print(f"[{highlight}]  m = {m}   σ = {s}")
+    print("동일 위험(σ)이면 m이 낮은 대안이 우월, 동일 m이면 σ가 낮은 대안이 우월합니다.")
+    print("프론티어 위 대안들 사이의 최종 선택은 의사결정자의 위험선호(risk appetite)에 달려 있습니다.")
+
+
+def risk_frontier_explorer():
+    """ELV·SSTO·TSTO(·HRST)를 (m, σ) 평면에 놓고 최적 대안 프론티어와 위험-기댓값 상충관계를 확인한다."""
+    interact(_plot_risk_frontier,
+             highlight=Dropdown(options=list(_ARCHITECTURES.keys()), value="TSTO",
+                                 description="아키텍처 선택", style={"description_width": "100px"}),
+             show_frontier=widgets.Checkbox(value=True, description="프론티어 표시"))
