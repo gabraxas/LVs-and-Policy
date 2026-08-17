@@ -1956,3 +1956,311 @@ def funding_journey_ladder():
     plt.show()
     print("엔진 연소시험 성공 → 시리즈 투자, 궤도 도달 → 정부계약 자격, 상업발사 연속 성공 → 상장·대형계약.")
     print("자금조달 계획 없는 개발일정은 공상이고, 기술 마일스톤 없는 자금계획은 공수표입니다.")
+
+# ============================================================
+# 36. CER 개발비 계산기 (12주차 §PART2 CER)
+# ============================================================
+_CER_COMPONENTS = {
+    "액체 추진 소모성 1단": {"a": 100, "x": 0.555, "mass_label": "무추진제 건조질량"},
+    "날개형(유익) 재사용 1단": {"a": 1442, "x": 0.326, "mass_label": "엔진 제외 건조질량"},
+}
+
+
+def _plot_cer_dev_cost(component, mass_t, f1, f2, f3, wyr_price_musd):
+    params = _CER_COMPONENTS[component]
+    a, x = params["a"], params["x"]
+    dev_wyr = f1 * f2 * f3 * a * mass_t ** x
+    dev_musd = dev_wyr * wyr_price_musd
+
+    mass_grid = np.linspace(max(mass_t * 0.2, 0.2), mass_t * 3, 200)
+    dev_grid_wyr = f1 * f2 * f3 * a * mass_grid ** x
+
+    fig, ax = plt.subplots(figsize=(8.5, 4.8))
+    ax.plot(mass_grid, dev_grid_wyr, color=PRIMARY, linewidth=2.2, zorder=3)
+    ax.plot(mass_t, dev_wyr, "o", color=RED, markersize=11, zorder=5)
+    ax.annotate(f"M={mass_t:,.1f}t\n{dev_wyr:,.0f} WYr", (mass_t, dev_wyr), fontsize=9,
+                color=RED, xytext=(10, 10), textcoords="offset points", fontweight="bold")
+    ax.set_facecolor("white")
+    for s in ["top", "right"]:
+        ax.spines[s].set_visible(False)
+    ax.grid(True, color=GRID, linewidth=0.8, zorder=0)
+    ax.set_xlabel(f"{params['mass_label']} (t, 톤)")
+    ax.set_ylabel("개발비 (Work-Year, WYr)")
+    ax.set_title(f"{component} — C_Dev = f1·f2·f3·a·M^{x}  (지수<1: 규모의 경제)")
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[입력] 구성요소={component}, 질량 M={mass_t:,.1f}t, f1={f1:.2f}, f2={f2:.2f}, f3={f3:.2f}, "
+          f"WYr 단가=${wyr_price_musd:.2f}M")
+    print(f"[산출] 개발비 = {dev_wyr:,.0f} WYr ≈ ${dev_musd:,.1f}M (WYr 단가 환산)")
+    print("  → 지수 x < 1이므로, 질량이 2배가 되어도 개발비는 2배보다 적게 늘어납니다 — 대형화에도")
+    print("  '규모의 경제'가 작동한다는 것이 CER의 직관입니다. 계수(a, x)는 예시치이며, 실무 적용 시")
+    print("  최신 TRANSCOST 매뉴얼 표를 반드시 참조할 것.")
+
+
+def cer_development_cost_calculator():
+    """비용추정관계식(CER) C_Dev = f1·f2·f3·a·M^x 을 직접 조작해, 질량과 보정계수가
+    개발비(Work-Year 단위)에 어떻게 반영되는지 확인한다. (12주차 슬라이드6 예시 계수 기반)"""
+    interact(_plot_cer_dev_cost,
+             component=Dropdown(options=list(_CER_COMPONENTS.keys()), description="구성요소",
+                                 style={"description_width": "80px"}, layout={"width": "320px"}),
+             mass_t=FloatSlider(value=5.0, min=0.5, max=30.0, step=0.5,
+                                 description="건조질량(t)",
+                                 style={"description_width": "120px"}, layout={"width": "460px"}),
+             f1=FloatSlider(value=1.0, min=0.5, max=2.0, step=0.1,
+                             description="f1 기술성숙도",
+                             style={"description_width": "120px"}, layout={"width": "460px"}),
+             f2=FloatSlider(value=1.0, min=0.5, max=2.0, step=0.1,
+                             description="f2 기술계수",
+                             style={"description_width": "120px"}, layout={"width": "460px"}),
+             f3=FloatSlider(value=1.0, min=0.5, max=2.0, step=0.1,
+                             description="f3 팀 경험",
+                             style={"description_width": "120px"}, layout={"width": "460px"}),
+             wyr_price_musd=FloatSlider(value=0.25, min=0.1, max=0.5, step=0.05,
+                                         description="WYr 단가($M)",
+                                         style={"description_width": "120px"}, layout={"width": "460px"}))
+
+
+# ============================================================
+# 37. Crawford 학습곡선 탐색기 (12주차 §PART2 LEARNING CURVE)
+# ============================================================
+def _plot_learning_curve(t1_musd, learning_rate_pct, highlight_n):
+    b = np.log2(learning_rate_pct / 100)
+    n_grid = np.arange(1, 129)
+    u_grid = t1_musd * n_grid.astype(float) ** b
+    u_highlight = t1_musd * highlight_n ** b
+
+    fig, ax = plt.subplots(figsize=(9, 4.8))
+    for p, style, lbl in [(95, ":", "95%"), (90, "--", "90%"), (85, "-.", "85%")]:
+        bb = np.log2(p / 100)
+        ax.plot(n_grid, t1_musd * n_grid.astype(float) ** bb, color=INK_MUTED, linewidth=1,
+                 linestyle=style, alpha=0.6, zorder=2, label=f"참고: p={p}%")
+    ax.plot(n_grid, u_grid, color=PRIMARY, linewidth=2.4, zorder=3, label=f"현재 p={learning_rate_pct:.0f}%")
+    ax.plot(highlight_n, u_highlight, "o", color=RED, markersize=11, zorder=5)
+    ax.annotate(f"{highlight_n}호기\n${u_highlight:.2f}M\n(T1의 {u_highlight/t1_musd*100:.0f}%)",
+                (highlight_n, u_highlight), fontsize=8.5, color=RED, xytext=(10, 10),
+                textcoords="offset points", fontweight="bold")
+    ax.set_facecolor("white")
+    for s in ["top", "right"]:
+        ax.spines[s].set_visible(False)
+    ax.grid(True, color=GRID, linewidth=0.8, zorder=0)
+    ax.set_xlabel("누적 생산 순번 n")
+    ax.set_ylabel("단위비용 Uₙ ($M)")
+    ax.set_title(f"Crawford 학습곡선 — Uₙ = T1 · n^b,  b=ln({learning_rate_pct:.0f}%)/ln2")
+    ax.legend(fontsize=7.5, frameon=False)
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[입력] T1(1호기 비용)=${t1_musd:.1f}M, 학습률 p={learning_rate_pct:.0f}%")
+    print(f"[산출] {highlight_n}호기 단위비용 ≈ ${u_highlight:.2f}M (T1의 {u_highlight/t1_musd*100:.0f}%)")
+    print("  → '많이 만드는 자가 싸게 만든다' — 대량생산·고빈도 사업자의 원가 우위는 기술이 아니라")
+    print("  이 산수에서 나옵니다. 학습률을 82~96% 범위에서 잘못 가정하면 생산비 추정이 크게 왜곡될 수")
+    print("  있으므로(RAND), 보고서에서 학습률 가정을 반드시 명시할 것.")
+
+
+def learning_curve_explorer():
+    """Crawford 단위 학습곡선 Uₙ = T1·n^b (b=ln(p)/ln2)을 직접 조작해, 학습률 p와 누적생산
+    순번 n이 단위비용을 어떻게 낮추는지 확인한다. (12주차 슬라이드7~8 연계)"""
+    interact(_plot_learning_curve,
+             t1_musd=FloatSlider(value=50, min=10, max=200, step=10,
+                                  description="T1(1호기 비용, $M)",
+                                  style={"description_width": "150px"}, layout={"width": "460px"}),
+             learning_rate_pct=FloatSlider(value=90, min=82, max=96, step=1,
+                                            description="학습률 p(%)",
+                                            style={"description_width": "150px"}, layout={"width": "460px"}),
+             highlight_n=IntSlider(value=8, min=2, max=128, step=1,
+                                    description="강조할 순번 n",
+                                    style={"description_width": "150px"}, layout={"width": "460px"}))
+
+
+# ============================================================
+# 38. 발사빈도(LpA)·간접운영비 탐색기 (12주차 §PART2 OPERATIONS/LAUNCH RATE)
+# ============================================================
+def _plot_lpa_ioc(lpa, outsourcing_share):
+    lpa_grid = np.linspace(1, 60, 200)
+    ioc_index_grid = 40 * outsourcing_share + 22.5 * lpa_grid ** (-0.379)
+    ioc_at_1 = 40 * outsourcing_share + 22.5 * 1 ** (-0.379)
+    ioc_sel = 40 * outsourcing_share + 22.5 * lpa ** (-0.379)
+    pct_of_baseline = ioc_sel / ioc_at_1 * 100
+
+    fig, ax = plt.subplots(figsize=(8.5, 4.8))
+    ax.plot(lpa_grid, ioc_index_grid, color=RED, linewidth=2.2, zorder=3)
+    ax.plot(lpa, ioc_sel, "o", color=RED, markersize=11, zorder=5)
+    ax.annotate(f"LpA={lpa:.0f}\n간접비 지수={ioc_sel:.1f}\n(LpA=1 대비 {pct_of_baseline:.0f}%)",
+                (lpa, ioc_sel), fontsize=8.5, color=RED, xytext=(10, 10),
+                textcoords="offset points", fontweight="bold")
+    ax.axhline(ioc_at_1, color=INK_MUTED, linestyle=":", linewidth=1)
+    ax.annotate(f"LpA=1 기준선 = {ioc_at_1:.1f}", (45, ioc_at_1), fontsize=8, color=INK_MUTED,
+                va="bottom")
+    ax.set_facecolor("white")
+    for s in ["top", "right"]:
+        ax.spines[s].set_visible(False)
+    ax.grid(True, color=GRID, linewidth=0.8, zorder=0)
+    ax.set_xlabel("연간발사횟수 LpA")
+    ax.set_ylabel("간접운영비(IOC) 지수")
+    ax.set_title("발사빈도가 오를수록 회당 간접비가 급락한다")
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[입력] LpA={lpa:.0f}, 외주비중 S={outsourcing_share:.1f}")
+    print(f"[산출] 간접비 지수 = {ioc_sel:.1f} (LpA=1 대비 {pct_of_baseline:.0f}%)")
+    print("  → LpA가 1에서 50으로 늘면 회당 간접비 지수가 대략 100→23 수준으로 급락합니다(외주비중=0 기준).")
+    print("  → 학습곡선(생산비 하락)과 LpA(운영비 하락)는 곱으로 작용 — '많이 만들고 자주 쏘는' 사업자만")
+    print("  이중의 원가 우위를 누립니다. 목표 LpA와 그 근거(수주 계획) 없는 원가 추정은 신뢰받지 못합니다.")
+
+
+def lpa_indirect_cost_explorer():
+    """간접운영비(IOC)가 연간발사횟수(LpA)의 음의 거듭제곱으로 하락하는 구조
+    (IOC = 40·S + 22.5·LpA^-0.379)를 직접 조작해 확인한다. (12주차 슬라이드9~10 연계)"""
+    interact(_plot_lpa_ioc,
+             lpa=FloatSlider(value=10, min=1, max=60, step=1,
+                              description="연간발사횟수 LpA",
+                              style={"description_width": "130px"}, layout={"width": "460px"}),
+             outsourcing_share=FloatSlider(value=0.0, min=0.0, max=1.0, step=0.1,
+                                            description="외주비중 S",
+                                            style={"description_width": "130px"}, layout={"width": "460px"}))
+
+
+# ============================================================
+# 39. CpF → PpF 종합 계산기 (12주차 §PART2 PRICING)
+# ============================================================
+def _plot_cpf_to_ppf(dev_musd, na, man_n_musd, ops_n_musd, margin_pct):
+    cpf = dev_musd / na + man_n_musd + ops_n_musd
+    ppf = cpf * (1 + margin_pct / 100)
+
+    fig, ax = plt.subplots(figsize=(9, 4.8))
+    stages = ["개발비 상각\n(DEV/Na)", "생산비\n(MANₙ)", "운영비\n(OPSₙ)", "CpF\n(원가 합계)", "PpF\n(가격)"]
+    cum1 = dev_musd / na
+    cum2 = cum1 + man_n_musd
+    cum3 = cum2 + ops_n_musd
+    vals = [cum1, man_n_musd, ops_n_musd, cpf, ppf]
+    bottoms = [0, cum1, cum2, 0, 0]
+    colors = [PRIMARY, AMBER, "#5B9BD5", RED, GREEN]
+    for i, (v, bt, c) in enumerate(zip(vals, bottoms, colors)):
+        if i < 3:
+            ax.bar(stages[i], v, bottom=bt, color=c, width=0.55, zorder=3)
+        else:
+            ax.bar(stages[i], v, color=c, width=0.55, zorder=3)
+    for i, v in enumerate([cum3, cum3, cum3, cpf, ppf]):
+        pass
+    ax.annotate(f"${cpf:.2f}M", (3, cpf), fontsize=9, ha="center", va="bottom", fontweight="bold", color=INK)
+    ax.annotate(f"${ppf:.2f}M", (4, ppf), fontsize=9, ha="center", va="bottom", fontweight="bold", color=INK)
+    ax.set_facecolor("white")
+    for s in ["top", "right"]:
+        ax.spines[s].set_visible(False)
+    ax.grid(True, axis="y", color=GRID, linewidth=0.8, zorder=0)
+    ax.set_ylabel("$M")
+    ax.set_title(f"CpF = DEV/Na + MANₙ + OPSₙ = \\${cpf:.2f}M  →  PpF = CpF×(1+{margin_pct:.0f}%) = \\${ppf:.2f}M")
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[입력] 개발비 DEV=${dev_musd:.0f}M, 계획 발사횟수 Na={na:.0f}, 생산비 MANₙ=${man_n_musd:.1f}M, "
+          f"운영비 OPSₙ=${ops_n_musd:.1f}M, 이윤율={margin_pct:.0f}%")
+    print(f"[산출] CpF=${cpf:.2f}M → PpF=${ppf:.2f}M")
+    print("  참고 — Drenthe et al.(2017) 검증 사례: Falcon 1 개발비 추정 $96M vs 실측 $90M(오차 +7%),")
+    print("  Falcon 9 개발비 추정 $419M vs 실측 $372M(오차 +13%) — 표준 CER은 수직계열화 상업기업의")
+    print("  비용을 과대추정하는 경향이 있다는 한계를 함께 고려할 것.")
+
+
+def cpf_to_ppf_calculator():
+    """발사원가 CpF = DEV/Na + MANₙ + OPSₙ 에서 이윤율을 반영한 발사가격 PpF까지의
+    산정 절차를 워터폴로 확인한다 — BMC '비용구조·수익원' 블록의 정량화. (12주차 슬라이드11)"""
+    interact(_plot_cpf_to_ppf,
+             dev_musd=FloatSlider(value=400, min=50, max=1000, step=50,
+                                   description="개발비 DEV($M)",
+                                   style={"description_width": "140px"}, layout={"width": "460px"}),
+             na=FloatSlider(value=20, min=5, max=100, step=5,
+                             description="계획 발사횟수 Na",
+                             style={"description_width": "140px"}, layout={"width": "460px"}),
+             man_n_musd=FloatSlider(value=15, min=2, max=50, step=1,
+                                     description="생산비 MANₙ($M)",
+                                     style={"description_width": "140px"}, layout={"width": "460px"}),
+             ops_n_musd=FloatSlider(value=5, min=1, max=30, step=1,
+                                     description="운영비 OPSₙ($M)",
+                                     style={"description_width": "140px"}, layout={"width": "460px"}),
+             margin_pct=FloatSlider(value=8, min=0, max=30, step=1,
+                                     description="이윤율(%)",
+                                     style={"description_width": "140px"}, layout={"width": "460px"}))
+
+
+# ============================================================
+# 40. 라이드셰어 vs 전용발사 가격 비교 (12주차 §PART3 RIDESHARE, 정적 다이어그램)
+# ============================================================
+def rideshare_vs_dedicated_chart():
+    """2019년 라이드셰어 도입 전후, 소형위성 발사의 실효가격이 어떻게 재편됐는지
+    (라이드셰어 vs 전용 소형발사) 비교한다. (정적 다이어그램 — 슬라이드12 수치 기반)"""
+    fig, ax = plt.subplots(figsize=(9, 5))
+    categories = ["라이드셰어 도입 전\n(~2018)", "라이드셰어 초기\n(2019~)", "라이드셰어 현재\n(2026 초)", "전용 소형발사\n(Electron 등)"]
+    low = [15000, 2000, 5000, 20000]
+    high = [30000, 5000, 9000, 40000]
+    mid = [(l + h) / 2 for l, h in zip(low, high)]
+    colors = [INK_MUTED, GREEN, AMBER, RED]
+
+    for i, (c, l, h, m, col) in enumerate(zip(categories, low, high, mid, colors)):
+        ax.plot([i, i], [l, h], color=col, linewidth=8, alpha=0.35, zorder=2, solid_capstyle="round")
+        ax.plot(i, m, "o", color=col, markersize=12, zorder=3)
+        ax.annotate(f"${l:,}~{h:,}/kg", (i, h), fontsize=9, ha="center", va="bottom",
+                    fontweight="bold", color=col, xytext=(0, 6), textcoords="offset points")
+
+    ax.set_xticks(range(len(categories)))
+    ax.set_xticklabels(categories, fontsize=9)
+    ax.set_yscale("log")
+    ax.set_facecolor("white")
+    for s in ["top", "right"]:
+        ax.spines[s].set_visible(False)
+    ax.grid(True, axis="y", color=GRID, linewidth=0.8, zorder=0)
+    ax.set_ylabel("실효가격 $/kg (로그축)")
+    ax.set_title("시장은 '저가 합승(라이드셰어)'과 '고가 전용'으로 양분 — 중간지대가 소멸")
+    plt.tight_layout()
+    plt.show()
+
+    print("가격 5배 하락의 원천은 신기술이 아니라 '남의 학습곡선에 합승'하는 구조입니다.")
+    print("2026년 초 기준 라이드셰어는 약 $7,000/kg 수준으로 재상승(수요 증가·인플레이션 반영)했지만,")
+    print("전용 소형발사 대비 여전히 수 분의 1 수준입니다 — 전용발사는 '내 궤도·내 일정' 가치에 집중해야 생존합니다.")
+
+
+# ============================================================
+# 41. TAM-SAM-SOM 퍼널 계산기 (12주차 WORKSHOP ① 수요 정량화)
+# ============================================================
+def _plot_tam_sam_som(tam_flights, sam_pct, som_pct):
+    sam_flights = tam_flights * sam_pct / 100
+    som_flights = sam_flights * som_pct / 100
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    labels = [f"TAM\n{tam_flights:.0f}회/년", f"SAM\n{sam_flights:.1f}회/년", f"SOM\n{som_flights:.2f}회/년"]
+    vals = [tam_flights, sam_flights, som_flights]
+    colors = [INK_MUTED, AMBER, GREEN]
+    widths = [1.0, sam_flights / tam_flights if tam_flights else 0, som_flights / tam_flights if tam_flights else 0]
+
+    for i, (lbl, v, c, w) in enumerate(zip(labels, vals, colors, widths)):
+        ax.barh(2 - i, w, height=0.6, color=c, zorder=3, left=(1 - w) / 2)
+        ax.annotate(lbl, (0.5, 2 - i), fontsize=10, ha="center", va="center", fontweight="bold", color="white",
+                    zorder=4)
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(-0.5, 2.5)
+    ax.axis("off")
+    ax.set_title(f"TAM {tam_flights:.0f}회 → SAM {sam_flights:.1f}회({sam_pct:.0f}%) → SOM {som_flights:.2f}회({som_pct:.0f}%)",
+                 fontsize=11.5, color=INK)
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[입력] TAM(전체 발사수요)={tam_flights:.0f}회/년, SAM 비중={sam_pct:.0f}%, SOM 비중={som_pct:.0f}%")
+    print(f"[산출] SAM={sam_flights:.1f}회/년, SOM={som_flights:.2f}회/년")
+    print("  → SOM이 곧 우리 팀의 현실적 목표 LpA입니다 — 이 값을 위 CpF/PpF·손익분기 계산기의")
+    print("  발사빈도·계획 발사횟수 가정과 반드시 정합시킬 것. 근거 출처(위성 발사계획, 정부 중기계획)를 명시할 것.")
+
+
+def tam_sam_som_funnel():
+    """전체 발사수요(TAM)에서 목표 세그먼트로 좁힌 유효시장(SAM), 현실적 수주 가능분(SOM)까지
+    깔때기 구조로 정량화한다 — 사업기획보고서 ③ 시장분석의 출발점. (12주차 워크숍 ①)"""
+    interact(_plot_tam_sam_som,
+             tam_flights=FloatSlider(value=200, min=20, max=500, step=10,
+                                      description="TAM(회/년)",
+                                      style={"description_width": "120px"}, layout={"width": "460px"}),
+             sam_pct=FloatSlider(value=15, min=1, max=100, step=1,
+                                  description="SAM 비중(%)",
+                                  style={"description_width": "120px"}, layout={"width": "460px"}),
+             som_pct=FloatSlider(value=10, min=1, max=100, step=1,
+                                  description="SOM 비중(%)",
+                                  style={"description_width": "120px"}, layout={"width": "460px"}))
