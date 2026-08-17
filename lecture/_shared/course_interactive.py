@@ -1092,3 +1092,196 @@ def insurance_market_cycle_explorer():
              base_capacity_musd=FloatSlider(value=400, min=300, max=500, step=10,
                                              description="연화시장 기준용량($M)",
                                              style={"description_width": "120px"}, layout={"width": "480px"}))
+
+# ============================================================
+# 21. 미국 우주수송 법제 변천 타임라인 (9주차 §PART1, 정적 다이어그램)
+# ============================================================
+def us_space_law_timeline():
+    """1958년 NASA법(국가독점)부터 2026년 상업화 행정명령·Part 450 전면시행까지,
+    미국 우주수송 법제가 단계적으로 개방되어 온 40년의 흐름을 보여준다 (정적 다이어그램)."""
+    events = [
+        ("1958", "NASA법\n국가독점 출발", INK_MUTED),
+        ("1984", "CSLA\n민간발사 '허용'", PRIMARY),
+        ("1986", "챌린저 참사\n왕복선 상업탑재 금지→실질개방", RED),
+        ("2004", "CSLAA\n유인 상업비행 규제체계", PRIMARY),
+        ("2006", "COTS 개시\n정부 앵커계약 모델", AMBER),
+        ("2015", "CSLCA\n우주자원 소유권 인정", PRIMARY),
+        ("2021", "Part 450\n발사허가 통합·간소화", AMBER),
+        ("2025~26", "Golden Dome ·\n상업화 행정명령", RED),
+    ]
+    fig, ax = plt.subplots(figsize=(13, 3.6))
+    xs = list(range(len(events)))
+    ax.plot(xs, [0] * len(xs), color="#B0B0B0", linewidth=2, zorder=1)
+    for i, (x, (yr, label, color)) in enumerate(zip(xs, events)):
+        ax.scatter(x, 0, s=200, color=color, zorder=3, edgecolor="white", linewidth=1.5)
+        y_off = 24 if i % 2 == 0 else -24
+        va = "bottom" if i % 2 == 0 else "top"
+        ax.annotate(yr, (x, 0), fontsize=10.5, fontweight="bold", color=INK,
+                    xytext=(0, y_off), textcoords="offset points", ha="center", va=va)
+        ax.annotate(label, (x, 0), fontsize=8, color=INK_MUTED,
+                    xytext=(0, y_off + (14 if i % 2 == 0 else -14)), textcoords="offset points",
+                    ha="center", va=va)
+    ax.set_xlim(-0.5, len(xs) - 0.5)
+    ax.set_ylim(-2.0, 2.0)
+    ax.axis("off")
+    ax.set_title("미국 우주수송 법제 40년 — '허용 → 위기가 강제한 개방 → 새 영역 규제화'의 반복",
+                  fontsize=12, color=INK, pad=8)
+    plt.tight_layout()
+    plt.show()
+    print("10~15년마다 '허용 → 위기가 강제한 실질개방 → 새 영역 규제화'의 사이클이 반복됩니다.")
+    print("2025~26년의 안보확장(Golden Dome)·규제완화 행정명령도 이 사다리의 최신 단입니다.")
+
+
+# ============================================================
+# 22. Cost-Plus vs 고정가 마일스톤 계약 탐색기 (9주차 §PART2 COTS/ROLE SHIFT)
+# ============================================================
+def _plot_contract_comparison(target_cost_musd, cost_overrun_pct, fee_pct, milestone_margin_pct):
+    actual_cost = target_cost_musd * (1 + cost_overrun_pct / 100)
+    fee = target_cost_musd * fee_pct / 100
+    fixed_price = target_cost_musd * (1 + milestone_margin_pct / 100)
+
+    overruns = np.linspace(0, 100, 200)
+    actual_costs = target_cost_musd * (1 + overruns / 100)
+
+    gov_cost_plus = actual_costs + fee
+    gov_fixed = np.full_like(overruns, fixed_price)
+
+    contractor_profit_cost_plus = np.full_like(overruns, fee)
+    contractor_profit_fixed = fixed_price - actual_costs
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.6))
+
+    ax = axes[0]
+    ax.plot(overruns, gov_cost_plus, color=RED, linewidth=2.2, label="Cost-Plus (구모델)", zorder=3)
+    ax.plot(overruns, gov_fixed, color=PRIMARY, linewidth=2.2, label="고정가 마일스톤 (COTS)", zorder=3)
+    ax.plot(cost_overrun_pct, actual_cost + fee, "o", color=RED, markersize=9, zorder=5)
+    ax.plot(cost_overrun_pct, fixed_price, "o", color=PRIMARY, markersize=9, zorder=5)
+    ax.set_facecolor("white")
+    for s in ["top", "right"]:
+        ax.spines[s].set_visible(False)
+    ax.grid(True, color=GRID, linewidth=0.8, zorder=0)
+    ax.set_xlabel("실제비용 초과율(%)")
+    ax.set_ylabel("정부 지불액($M)")
+    ax.set_title("정부 부담액 — 초과분을 누가 흡수하는가")
+    ax.legend(fontsize=8.5, frameon=False)
+
+    ax = axes[1]
+    ax.plot(overruns, contractor_profit_cost_plus, color=RED, linewidth=2.2, label="Cost-Plus (구모델)", zorder=3)
+    ax.plot(overruns, contractor_profit_fixed, color=PRIMARY, linewidth=2.2, label="고정가 마일스톤 (COTS)", zorder=3)
+    ax.axhline(0, color=INK_MUTED, linestyle=":", linewidth=1)
+    ax.plot(cost_overrun_pct, fee, "o", color=RED, markersize=9, zorder=5)
+    ax.plot(cost_overrun_pct, fixed_price - actual_cost, "o", color=PRIMARY, markersize=9, zorder=5)
+    ax.set_facecolor("white")
+    for s in ["top", "right"]:
+        ax.spines[s].set_visible(False)
+    ax.grid(True, color=GRID, linewidth=0.8, zorder=0)
+    ax.set_xlabel("실제비용 초과율(%)")
+    ax.set_ylabel("기업 손익($M)")
+    ax.set_title("기업 손익 — 누가 리스크를 지는가")
+    ax.legend(fontsize=8.5, frameon=False)
+
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[입력] 목표비용=${target_cost_musd:,.0f}M, 실제비용 초과율={cost_overrun_pct:.0f}%, "
+          f"cost-plus 수수료율={fee_pct:.0f}%, 고정가 마진율={milestone_margin_pct:.0f}%")
+    print(f"[Cost-Plus] 정부지불 = ${actual_cost + fee:,.1f}M (실제비용을 그대로 반영) · 기업이익 = ${fee:,.1f}M (항상 보장)")
+    print(f"[고정가 마일스톤] 정부지불 = ${fixed_price:,.1f}M (고정) · 기업손익 = ${fixed_price - actual_cost:,.1f}M")
+    if fixed_price - actual_cost < 0:
+        print("  → 초과율이 커지면 고정가 계약에서는 기업이 손실을 직접 부담합니다 — COTS가 SpaceX에 큰 리스크였던 이유입니다.")
+    else:
+        print("  → 이 초과율에서는 고정가 계약에서도 기업이 이익을 유지합니다.")
+    print("  → Cost-Plus는 정부가 예산초과 리스크를 흡수, 고정가 마일스톤은 기업이 리스크를 흡수 — "
+          "COTS가 '정부 예산 예측가능성'과 '기업의 비용절감 유인'을 동시에 얻은 이유입니다.")
+
+
+def cost_plus_vs_fixed_price_explorer():
+    """Apollo~Shuttle 시대의 Cost-Plus 계약과, COTS 이후의 고정가 마일스톤 계약이
+    비용 초과 리스크를 정부와 기업 사이에 어떻게 다르게 배분하는지 직접 조작해 비교한다."""
+    interact(_plot_contract_comparison,
+             target_cost_musd=FloatSlider(value=300, min=50, max=1000, step=50,
+                                           description="목표비용($M)",
+                                           style={"description_width": "120px"}, layout={"width": "480px"}),
+             cost_overrun_pct=FloatSlider(value=25, min=0, max=100, step=5,
+                                           description="실제비용 초과율(%)",
+                                           style={"description_width": "120px"}, layout={"width": "480px"}),
+             fee_pct=FloatSlider(value=10, min=5, max=20, step=1,
+                                  description="Cost-Plus 수수료율(%)",
+                                  style={"description_width": "120px"}, layout={"width": "480px"}),
+             milestone_margin_pct=FloatSlider(value=10, min=0, max=30, step=5,
+                                               description="고정가 마진율(%)",
+                                               style={"description_width": "120px"}, layout={"width": "480px"}))
+
+
+# ============================================================
+# 23. 우주투자 자본집중도 (9주차 §PART3 TREND, 정적 다이어그램)
+# ============================================================
+def investment_concentration_chart():
+    """2025~26년 미국 우주투자 통계 — 발사서비스가 딜 건수 비중보다 자본 비중이 훨씬 크고,
+    $50M 이상 메가라운드가 소수 건수로 자본 대부분을 차지하는 자본집중 구조를 보여준다
+    (정적 다이어그램 — 슬라이드13 수치 기반)."""
+    fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.4))
+
+    ax = axes[0]
+    cats = ["딜 건수 비중", "자본 비중"]
+    vals = [17, 30]
+    ax.bar(cats, vals, color=[PRIMARY, AMBER], width=0.5, zorder=3)
+    for i, v in enumerate(vals):
+        ax.annotate(f"{v}%", (i, v), fontsize=12, ha="center", va="bottom", fontweight="bold", color=INK)
+    ax.set_facecolor("white")
+    for s in ["top", "right"]:
+        ax.spines[s].set_visible(False)
+    ax.grid(True, axis="y", color=GRID, linewidth=0.8, zorder=0)
+    ax.set_ylabel("%")
+    ax.set_ylim(0, 40)
+    ax.set_title("발사서비스 부문 — 딜 건수 대비 자본 쏠림")
+
+    ax = axes[1]
+    cats2 = ["딜 건수 비중\n($50M+ 라운드)", "자본 비중\n($50M+ 라운드)"]
+    vals2 = [45, 92]
+    ax.bar(cats2, vals2, color=[PRIMARY, RED], width=0.5, zorder=3)
+    for i, v in enumerate(vals2):
+        ax.annotate(f"{v}%", (i, v), fontsize=12, ha="center", va="bottom", fontweight="bold", color=INK)
+    ax.set_facecolor("white")
+    for s in ["top", "right"]:
+        ax.spines[s].set_visible(False)
+    ax.grid(True, axis="y", color=GRID, linewidth=0.8, zorder=0)
+    ax.set_ylabel("%")
+    ax.set_ylim(0, 100)
+    ax.set_title("메가라운드($50M+) — 건수는 45%, 자본은 92%")
+
+    plt.tight_layout()
+    plt.show()
+
+    print("발사서비스는 딜 건수 비중(17%)보다 자본 비중(30%)이 훨씬 큽니다 — 소수의 대형 라운드에 자본이 집중되는")
+    print("자본집약 산업 특성을 보여줍니다 (12주차 학습곡선·발사빈도 논의와 연결).")
+    print("$50M 이상 라운드는 딜 건수의 45%에 불과하지만 자본의 92%를 차지 — 사실상 '메가라운드 시장'입니다.")
+
+
+# ============================================================
+# 24. Golden Dome 예산 브레이크다운 (9주차 §PART4 BUDGET, 정적 다이어그램)
+# ============================================================
+def golden_dome_budget_chart():
+    """Golden Dome 미사일방어 구상이 견인한 FY2026~27 우주군 예산 규모를 보여준다
+    (정적 다이어그램 — 슬라이드17 수치 기반, 추정치는 발표기관에 따라 편차가 있음에 유의)."""
+    fig, ax = plt.subplots(figsize=(9.5, 4.6))
+    labels = ["FY26 우주군\n기본예산", "SBI 프로토타입\n계약총액(12개사)", "FY27 Golden Dome\n요청예산", "FY27 중\n기본예산분"]
+    values = [26.3, 3.2, 17.5, 0.398]
+    colors = [PRIMARY, AMBER, RED, "#D9A441"]
+    bars = ax.bar(labels, values, color=colors, width=0.55, zorder=3)
+    for rect, v in zip(bars, values):
+        ax.annotate(f"${v:,.1f}B", (rect.get_x() + rect.get_width() / 2, v), fontsize=10,
+                    ha="center", va="bottom", fontweight="bold", color=INK)
+    ax.set_facecolor("white")
+    for s in ["top", "right"]:
+        ax.spines[s].set_visible(False)
+    ax.grid(True, axis="y", color=GRID, linewidth=0.8, zorder=0)
+    ax.set_ylabel("$B (십억 달러)")
+    ax.set_title("Golden Dome이 견인한 우주군 예산 — FY26 대비 +40% 증액")
+    plt.tight_layout()
+    plt.show()
+
+    print("FY2026 우주군 기본예산은 전년 대비 약 +40% 증액되었고, 이 증가분의 상당 부분이 Golden Dome 관련입니다.")
+    print("CBO는 20년 총 비용을 약 $1.2조로 추정하지만 국방부는 이 추정치에 이의를 제기 — 추정치 간 편차가 큽니다.")
+    print("SBI 프로토타입 계약은 12개사에 Other Transaction Authority(OTA)로 발주되어, COTS의 '경쟁유지' 철학이")
+    print("안보 조달에도 이식된 사례로 해석됩니다.")
