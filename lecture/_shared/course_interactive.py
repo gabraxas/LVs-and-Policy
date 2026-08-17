@@ -1,6 +1,6 @@
 """
 course_interactive.py
-우주수송정책과 발사체 기술 — 강의용 인터랙티브 계산기 모음 (1~4주차 공용)
+우주수송정책과 발사체 기술 — 강의용 인터랙티브 계산기 모음 (1~7주차 공용)
 
 사용법 (Colab 노트북 첫 셀):
     !pip install -q ipywidgets
@@ -754,3 +754,341 @@ def shuttle_reuse_economics_explorer():
              program_years=IntSlider(value=30, min=10, max=40, step=5,
                                       description="프로그램 기간(년)",
                                       style={"description_width": "110px"}, layout={"width": "480px"}))
+
+# ============================================================
+# 15. FAA Part 450 연혁 타임라인 (7주차 §PART3, 정적 다이어그램)
+# ============================================================
+def faa_part450_timeline():
+    """1984년 CSLA부터 2026년 Part 450 전면시행까지의 미국 발사허가 법제 연혁을
+    타임라인으로 보여준다 (정적 다이어그램 — 슬라이더 없음)."""
+    events = [
+        ("1984", "상업우주발사법(CSLA)\n제정 — 민간발사 허가체계 출발", PRIMARY),
+        ("1988", "정부 배상책임\n지원(Indemnification) 도입", PRIMARY),
+        ("2006", "발사장(Launch Site)\n허가 규정 정비", PRIMARY),
+        ("2021", "Part 450 규정 제정\n(4개 규정→성능기반 단일화)", AMBER),
+        ("2026.3", "구 규정(legacy license)\n완전 폐지, 전면 시행", RED),
+    ]
+    fig, ax = plt.subplots(figsize=(11, 3.2))
+    xs = list(range(len(events)))
+    ax.plot(xs, [0] * len(xs), color="#B0B0B0", linewidth=2, zorder=1)
+    for x, (yr, label, color) in zip(xs, events):
+        ax.scatter(x, 0, s=220, color=color, zorder=3, edgecolor="white", linewidth=1.5)
+        ax.annotate(yr, (x, 0), fontsize=11, fontweight="bold", color=INK,
+                    xytext=(0, 20), textcoords="offset points", ha="center")
+        ax.annotate(label, (x, 0), fontsize=8.5, color=INK_MUTED,
+                    xytext=(0, -22), textcoords="offset points", ha="center", va="top")
+    ax.set_xlim(-0.5, len(xs) - 0.5)
+    ax.set_ylim(-1.4, 1.1)
+    ax.axis("off")
+    ax.set_title("미국 상업발사 허가법제 연혁 — CSLA(1984) → Part 450 전면시행(2026.3.9)",
+                  fontsize=12, color=INK, pad=6)
+    plt.tight_layout()
+    plt.show()
+    print("42년에 걸쳐 4개 개별 규정(ELV/RLV/발사장/재진입)이 하나의 성능기반 규정으로 통합되었습니다.")
+    print("전환 기간 동안 신규·기존 사업자 모두 legacy license에서 Part 450으로 이관을 완료해야 했습니다.")
+
+
+# ============================================================
+# 16. 한국 우주법제 연혁 타임라인 (7주차 §PART2, 정적 다이어그램)
+# ============================================================
+def korea_space_law_timeline():
+    """2005년 우주개발진흥법 제정부터 2026년 3대 입법과제까지, 한국 발사허가·손해배상 법제의
+    최근 개편 흐름을 타임라인으로 보여준다 (정적 다이어그램 — 슬라이더 없음)."""
+    events = [
+        ("2005", "우주개발진흥법\n제정 (제11조 발사허가)", PRIMARY),
+        ("2007", "우주손해배상법\n제정 (무과실책임)", PRIMARY),
+        ("2024下", "발사허가 표준절차 개선\n+ 중장기 발사면허제도", AMBER),
+        ("2025", "시험비행 사전신고·\n예비평가 신설", AMBER),
+        ("2026", "3대 입법과제\n(우주항공기본법 등)", RED),
+    ]
+    fig, ax = plt.subplots(figsize=(11, 3.2))
+    xs = list(range(len(events)))
+    ax.plot(xs, [0] * len(xs), color="#B0B0B0", linewidth=2, zorder=1)
+    for x, (yr, label, color) in zip(xs, events):
+        ax.scatter(x, 0, s=220, color=color, zorder=3, edgecolor="white", linewidth=1.5)
+        ax.annotate(yr, (x, 0), fontsize=11, fontweight="bold", color=INK,
+                    xytext=(0, 20), textcoords="offset points", ha="center")
+        ax.annotate(label, (x, 0), fontsize=8.5, color=INK_MUTED,
+                    xytext=(0, -22), textcoords="offset points", ha="center", va="top")
+    ax.set_xlim(-0.5, len(xs) - 0.5)
+    ax.set_ylim(-1.4, 1.1)
+    ax.axis("off")
+    ax.set_title("한국 우주법제 연혁 — 우주개발진흥법(2005) → 3대 입법과제(2026)",
+                  fontsize=12, color=INK, pad=6)
+    plt.tight_layout()
+    plt.show()
+    print("21년 만에 '개발 지원' 중심 법제에서 '민간 산업화 전제' 법제로 구조가 재편되고 있습니다.")
+    print("중장기 발사면허제도는 미국 Part 450의 포트폴리오 라이선스와 같은 방향의 개편입니다.")
+
+
+# ============================================================
+# 17. 3단 책임구조 탐색기 (7주차 §PART4 WHY INSURANCE)
+# ============================================================
+def _plot_liability_tiers(total_loss_musd, mpl_musd, gov_cap_musd):
+    tier1 = min(total_loss_musd, mpl_musd)
+    tier2 = min(max(total_loss_musd - mpl_musd, 0), max(gov_cap_musd - mpl_musd, 0))
+    tier3 = max(total_loss_musd - gov_cap_musd, 0)
+
+    fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.6), gridspec_kw={"width_ratios": [1, 1.6]})
+
+    ax = axes[0]
+    labels = ["① 오퍼레이터\n보험(MPL까지)", "② 정부배상\n(제한적)", "③ 국가\n무제한책임"]
+    vals = [tier1, tier2, tier3]
+    colors = [PRIMARY, AMBER, RED]
+    bottoms = [0, tier1, tier1 + tier2]
+    for i, (v, c, b) in enumerate(zip(vals, colors, bottoms)):
+        ax.bar(0, v, bottom=b, color=c, width=0.5, zorder=3,
+               label=f"{labels[i]}: ${v:,.0f}M" if v > 0 else None)
+    _style(ax, grid=True)
+    ax.set_xlim(-0.6, 1.3)
+    ax.set_xticks([])
+    ax.set_ylabel("배상액 ($M)")
+    ax.axhline(mpl_musd, color=PRIMARY, linestyle="--", linewidth=1, alpha=0.7)
+    ax.axhline(gov_cap_musd, color=AMBER, linestyle="--", linewidth=1, alpha=0.7)
+    ax.set_title(f"총 손실 ${total_loss_musd:,.0f}M의 배분")
+    ax.legend(fontsize=8, frameon=False, loc="upper left", bbox_to_anchor=(1.05, 1.0))
+
+    ax = axes[1]
+    stages = ["MPL\n(오퍼레이터 보험한도)", "정부배상 상한", "손실 발생 시나리오"]
+    ax.barh(0, mpl_musd, color=PRIMARY, height=0.5, zorder=3, label="① MPL")
+    ax.barh(0, gov_cap_musd - mpl_musd, left=mpl_musd, color=AMBER, height=0.5, zorder=3, label="② 정부배상 구간")
+    ax.barh(0, max(total_loss_musd - gov_cap_musd, 0) if total_loss_musd > gov_cap_musd else 0,
+            left=gov_cap_musd, color=RED, height=0.5, zorder=3, label="③ 국가무제한 구간(예시)")
+    ax.axvline(total_loss_musd, color=INK, linewidth=2.2, zorder=5)
+    ax.annotate(f"실제 손실\n${total_loss_musd:,.0f}M", (total_loss_musd, 0.42), fontsize=9,
+                color=INK, ha="center", fontweight="bold")
+    _style(ax, grid=False)
+    ax.set_yticks([])
+    ax.set_xlabel("책임 한도 스케일 ($M)")
+    ax.set_title("어느 구간에 손실이 위치하는가")
+    ax.legend(fontsize=8, frameon=False, loc="upper right")
+
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[가정] MPL(보험한도) = ${mpl_musd:,.0f}M · 정부배상 상한 = ${gov_cap_musd:,.0f}M · "
+          f"총 손실 = ${total_loss_musd:,.0f}M")
+    print(f"  ① 오퍼레이터 보험 부담: ${tier1:,.0f}M")
+    print(f"  ② 정부배상(제한적) 부담: ${tier2:,.0f}M")
+    print(f"  ③ 국가 무제한책임 부담: ${tier3:,.0f}M")
+    if tier3 > 0:
+        print("  → 손실이 정부배상 상한마저 초과 — 책임협약상 국가책임에는 법정 상한이 없으므로 "
+              "이론상 초과분은 전액 국가(납세자) 부담입니다.")
+    else:
+        print("  → 이번 시나리오는 정부배상 상한 이내에서 흡수됩니다.")
+
+
+def liability_tiers_explorer():
+    """국제법상 국가의 무과실 책임이 ①오퍼레이터 보험 → ②정부의 제한적 배상 → ③국가의 무제한책임
+    순으로 재분배되는 3단 구조를, 손실 규모를 직접 조작해 확인한다."""
+    interact(_plot_liability_tiers,
+             total_loss_musd=FloatSlider(value=300, min=0, max=2000, step=50,
+                                          description="총 손실액($M)",
+                                          style={"description_width": "120px"}, layout={"width": "480px"}),
+             mpl_musd=FloatSlider(value=200, min=50, max=500, step=10,
+                                   description="MPL 보험한도($M)",
+                                   style={"description_width": "120px"}, layout={"width": "480px"}),
+             gov_cap_musd=FloatSlider(value=1500, min=500, max=3000, step=100,
+                                       description="정부배상 상한($M)",
+                                       style={"description_width": "120px"}, layout={"width": "480px"}))
+
+
+# ============================================================
+# 18. 기대사상자수(Ec)·최대예상손실(MPL) 계산기 (7주차 §PART4 MATH 1)
+# ============================================================
+def _plot_ec_mpl(fail_prob_pct, casualty_area_km2, pop_density, vsl_musd, property_damage_musd):
+    P = fail_prob_pct / 100
+    Ec = P * casualty_area_km2 * pop_density  # 기대사상자수(개념적 단순화 모델)
+    casualty_value = Ec * vsl_musd
+    mpl = casualty_value + property_damage_musd
+
+    fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.4))
+
+    ax = axes[0]
+    rhos = np.linspace(0, 500, 200)
+    ecs = P * casualty_area_km2 * rhos
+    ax.plot(rhos, ecs, color=PRIMARY, linewidth=2.2, zorder=3)
+    ax.axvline(pop_density, color=AMBER, linestyle="--", linewidth=1.3)
+    ax.plot(pop_density, Ec, "o", color=AMBER, markersize=10, zorder=5)
+    _style(ax)
+    ax.set_xlabel("낙하구역 인구밀도 ρ (명/km²) — 해상=0")
+    ax.set_ylabel("기대사상자수 Ec")
+    ax.set_title(f"Ec = P × A_c × ρ  →  Ec = {Ec:.3f}")
+
+    ax = axes[1]
+    bars = ["인명피해\n환산액\n(Ec×VSL)", "재산피해\n추정액", "MPL\n(합산)"]
+    vals = [casualty_value, property_damage_musd, mpl]
+    colors = [PRIMARY, AMBER, RED]
+    b = ax.bar(bars, vals, color=colors, zorder=3, width=0.55)
+    _style(ax)
+    ax.set_ylabel("$M")
+    ax.axhspan(100, 500, color=GREEN, alpha=0.08, zorder=0)
+    ax.annotate("FAA 통상 MPL 구간\n($100M~$500M)", xy=(2.35, 480), fontsize=7.5, color=GREEN, ha="left")
+    for rect, v in zip(b, vals):
+        ax.annotate(f"${v:,.0f}M", (rect.get_x() + rect.get_width() / 2, v), fontsize=9,
+                    ha="center", va="bottom", color=INK)
+    ax.set_title(f"MPL = Ec×VSL + 재산피해 = ${mpl:,.0f}M")
+
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[입력] 실패확률 P={fail_prob_pct:.1f}%, 사상면적 A_c={casualty_area_km2:.2f}km², "
+          f"인구밀도 ρ={pop_density:.0f}명/km², VSL=${vsl_musd:.1f}M/인, 재산피해=${property_damage_musd:.0f}M")
+    print(f"[산출] Ec = {Ec:.4f}  →  인명피해 환산액 ${casualty_value:,.1f}M  →  MPL ≈ ${mpl:,.0f}M")
+    print("  → 해상 발사(ρ≈0)는 인명피해 환산액이 0에 수렴 — 재산피해만으로 MPL이 결정되는 이유입니다.")
+    print("  → 내륙·근접 도심 낙하구역일수록 ρ가 커져 MPL이 슬라이드9의 상단($5억)에 근접합니다.")
+
+
+def ec_mpl_explorer():
+    """제3자 배상책임보험의 필요금액을 정하는 기대사상자수(Ec) 방법론을 직접 조작 —
+    실패확률·사상면적·낙하구역 인구밀도가 MPL(최대예상손실)에 미치는 영향을 확인한다."""
+    interact(_plot_ec_mpl,
+             fail_prob_pct=FloatSlider(value=3.0, min=1.0, max=8.0, step=0.5,
+                                        description="실패확률(%)",
+                                        style={"description_width": "120px"}, layout={"width": "480px"}),
+             casualty_area_km2=FloatSlider(value=1.0, min=0.2, max=5.0, step=0.2,
+                                            description="사상면적 Ac(km²)",
+                                            style={"description_width": "120px"}, layout={"width": "480px"}),
+             pop_density=FloatSlider(value=50, min=0, max=500, step=10,
+                                      description="인구밀도 ρ(명/km²)",
+                                      style={"description_width": "120px"}, layout={"width": "480px"}),
+             vsl_musd=FloatSlider(value=10.0, min=5.0, max=15.0, step=0.5,
+                                   description="VSL($M/인)",
+                                   style={"description_width": "120px"}, layout={"width": "480px"}),
+             property_damage_musd=FloatSlider(value=120, min=20, max=300, step=10,
+                                               description="재산피해 추정($M)",
+                                               style={"description_width": "120px"}, layout={"width": "480px"}))
+
+
+# ============================================================
+# 19. 순보험료 → 영업보험료 계산기 (7주차 §PART4 MATH 2)
+# ============================================================
+def _plot_premium_waterfall(mpl_musd, fail_prob_pct, risk_margin_pct, expense_ratio_pct,
+                             reinsurance_cost_pct, profit_margin_pct):
+    P = fail_prob_pct / 100
+    pure_premium = P * mpl_musd
+    loaded = pure_premium * (1 + risk_margin_pct / 100 + expense_ratio_pct / 100)
+    denom = 1 - reinsurance_cost_pct / 100 - profit_margin_pct / 100
+    denom = max(denom, 0.05)
+    gross_premium = loaded / denom
+    rate_on_line = gross_premium / mpl_musd * 100
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.6))
+
+    ax = axes[0]
+    stages = ["순보험료\n(P×MPL)", "+리스크마진", "+사업비율", "÷(1−재보험\n−이윤율)"]
+    stage_vals = [pure_premium,
+                  pure_premium * (1 + risk_margin_pct / 100),
+                  loaded,
+                  gross_premium]
+    colors = [PRIMARY, "#5B9BD5", AMBER, RED]
+    ax.bar(stages, stage_vals, color=colors, zorder=3, width=0.6)
+    _style(ax)
+    for i, v in enumerate(stage_vals):
+        ax.annotate(f"${v:,.1f}M", (i, v), fontsize=9, ha="center", va="bottom", color=INK)
+    ax.set_ylabel("$M")
+    ax.set_title(f"순보험료 ${pure_premium:,.1f}M → 영업보험료 ${gross_premium:,.1f}M")
+
+    ax = axes[1]
+    ax.bar(["요율(Rate on Line)"], [rate_on_line], color=AMBER, width=0.4, zorder=3)
+    ax.axhspan(1.5, 2.0, color=GREEN, alpha=0.12, zorder=0)
+    ax.annotate("슬라이드13 통상 TPL 요율\n(MPL의 1.5~2.0%)", xy=(0.28, 1.9), fontsize=8, color=GREEN)
+    _style(ax)
+    ax.set_ylabel("영업보험료 / MPL (%)")
+    ax.set_ylim(0, max(rate_on_line * 1.3, 3))
+    ax.set_title(f"= {rate_on_line:.2f}%")
+
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[입력] MPL=${mpl_musd:,.0f}M, 실패확률={fail_prob_pct:.1f}%, 리스크마진={risk_margin_pct:.0f}%, "
+          f"사업비율={expense_ratio_pct:.0f}%, 재보험비용률={reinsurance_cost_pct:.0f}%, 이윤율={profit_margin_pct:.0f}%")
+    print(f"[산출] 순보험료 ${pure_premium:,.2f}M → 영업보험료 ${gross_premium:,.2f}M "
+          f"(MPL의 {rate_on_line:.2f}%)")
+    if rate_on_line > 2.0:
+        print("  → 슬라이드13의 통상 요율대(1.5~2.0%)를 상회 — 신형 기체·경화시장 국면을 가정한 결과일 수 있습니다.")
+    elif rate_on_line < 1.5:
+        print("  → 통상 요율대보다 낮음 — 성숙 기체·연화시장(soft market) 가정에 해당합니다.")
+    else:
+        print("  → 슬라이드13이 제시하는 통상 요율대(1.5~2.0%) 안에 위치합니다.")
+
+
+def insurance_premium_explorer():
+    """순보험료(P×MPL)에서 리스크마진·사업비율·재보험비용률·이윤율을 반영한 영업보험료까지의
+    산정 절차를 워터폴로 확인하고, 결과 요율을 시장 통상 요율대(1.5~2.0%)와 비교한다."""
+    interact(_plot_premium_waterfall,
+             mpl_musd=FloatSlider(value=250, min=100, max=500, step=10,
+                                   description="MPL($M)",
+                                   style={"description_width": "130px"}, layout={"width": "460px"}),
+             fail_prob_pct=FloatSlider(value=1.5, min=1.0, max=6.0, step=0.5,
+                                        description="실패확률(%)",
+                                        style={"description_width": "130px"}, layout={"width": "460px"}),
+             risk_margin_pct=FloatSlider(value=10, min=0, max=60, step=5,
+                                          description="리스크마진(%)",
+                                          style={"description_width": "130px"}, layout={"width": "460px"}),
+             expense_ratio_pct=FloatSlider(value=8, min=5, max=25, step=1,
+                                            description="사업비율(%)",
+                                            style={"description_width": "130px"}, layout={"width": "460px"}),
+             reinsurance_cost_pct=FloatSlider(value=8, min=0, max=20, step=1,
+                                               description="재보험비용률(%)",
+                                               style={"description_width": "130px"}, layout={"width": "460px"}),
+             profit_margin_pct=FloatSlider(value=6, min=0, max=15, step=1,
+                                            description="이윤율(%)",
+                                            style={"description_width": "130px"}, layout={"width": "460px"}))
+
+
+# ============================================================
+# 20. 발사보험 시장 경화(hardening) 탐색기 (7주차 §PART4 MARKET)
+# ============================================================
+def _plot_insurance_market_cycle(loss_ratio_pct, base_capacity_musd):
+    hardening = max(0, (loss_ratio_pct - 100) / 100)
+    rate_multiplier = 1 + hardening * 0.8
+    capacity = base_capacity_musd * (1 - min(hardening * 0.3, 0.5))
+
+    loss_ratios = np.linspace(50, 250, 200)
+    hardening_curve = np.clip((loss_ratios - 100) / 100, 0, None)
+    rate_curve = 1 + hardening_curve * 0.8
+    capacity_curve = base_capacity_musd * (1 - np.clip(hardening_curve * 0.3, 0, 0.5))
+
+    fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.4))
+
+    ax = axes[0]
+    ax.plot(loss_ratios, rate_curve, color=RED, linewidth=2.2, zorder=3)
+    ax.plot(loss_ratio_pct, rate_multiplier, "o", color=RED, markersize=10, zorder=5)
+    ax.axvline(179, color=INK_MUTED, linestyle=":", linewidth=1.2)
+    ax.annotate("2023년 실적\n(179%)", (179, 1.1), fontsize=8, color=INK_MUTED)
+    _style(ax)
+    ax.set_xlabel("손해율 (청구/보험료, %)")
+    ax.set_ylabel("요율 배수 (기준=1.0)")
+    ax.set_title(f"손해율 {loss_ratio_pct:.0f}% → 요율 ×{rate_multiplier:.2f}")
+
+    ax = axes[1]
+    ax.plot(loss_ratios, capacity_curve, color=PRIMARY, linewidth=2.2, zorder=3)
+    ax.plot(loss_ratio_pct, capacity, "o", color=PRIMARY, markersize=10, zorder=5)
+    _style(ax)
+    ax.set_xlabel("손해율 (%)")
+    ax.set_ylabel("단일리스크 조달가능 용량($M)")
+    ax.axhspan(300, 325, color=GREEN, alpha=0.12, zorder=0)
+    ax.annotate("2025~26 실측 구간\n($300~325M)", xy=(160, 330), fontsize=8, color=GREEN)
+    ax.set_title(f"조달가능 용량 ≈ ${capacity:,.0f}M")
+
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[입력] 손해율={loss_ratio_pct:.0f}%, 기준용량=${base_capacity_musd:,.0f}M")
+    print(f"[산출] 요율 배수 ×{rate_multiplier:.2f} · 조달가능 용량 ≈ ${capacity:,.0f}M")
+    print("  → 손해율이 100%를 넘는 해(2023년 179%)의 이듬해는 요율이 오르고 용량이 줄어드는 "
+          "'경화(hardening)' 국면이 나타납니다.")
+    print("  → 용량 부족은 대형 임무(다수 위성 라이드셰어 등)의 보험 미가입(무보험 발사) 유인으로 이어집니다.")
+
+
+def insurance_market_cycle_explorer():
+    """2023년 손해율 179%(보험료 $557M vs 청구 $995M) 이후 나타난 발사보험 시장의
+    경화(hardening) 메커니즘 — 손해율이 요율과 조달가능 용량에 미치는 영향을 단순 모델로 확인한다."""
+    interact(_plot_insurance_market_cycle,
+             loss_ratio_pct=FloatSlider(value=179, min=50, max=250, step=5,
+                                         description="손해율(%)",
+                                         style={"description_width": "120px"}, layout={"width": "480px"}),
+             base_capacity_musd=FloatSlider(value=400, min=300, max=500, step=10,
+                                             description="연화시장 기준용량($M)",
+                                             style={"description_width": "120px"}, layout={"width": "480px"}))
