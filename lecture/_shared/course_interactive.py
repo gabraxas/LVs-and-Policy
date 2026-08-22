@@ -73,6 +73,63 @@ def _style(ax, grid=True):
 
 
 # ============================================================
+# 0. 뉴턴의 포탄 — 곡률·낙하 매칭 탐색기 (2주차 §1.0)
+# ============================================================
+def _plot_cannonball_curvature(v_kms, altitude_km=200):
+    r = R_EARTH + altitude_km
+    g_r = MU_EARTH / r ** 2          # km/s^2 — 해당 고도의 국소중력
+    v_c = np.sqrt(MU_EARTH / r)      # km/s — 원궤도(제1우주) 속도
+
+    x = np.linspace(0.001, 90, 400)              # km, 수평 이동거리
+    y_curve_m = (x ** 2 / (2 * r)) * 1000         # m, 지구 곡률에 의한 접선 아래 하강거리
+    t = x / v_kms                                 # s
+    y_fall_m = (0.5 * g_r * t ** 2) * 1000         # m, 자유낙하 거리
+
+    fig, ax = plt.subplots(figsize=(8.5, 5.5))
+    ax.plot(x, y_curve_m, color=PRIMARY, linewidth=2.6, zorder=3,
+            label="지구 곡률에 의한 하강  y=x²/2r")
+    ax.plot(x, y_fall_m, color=AMBER, linewidth=2.2, linestyle="--", zorder=3,
+            label=f"포탄 자유낙하  y=½g_r t²  (v={v_kms:.2f} km/s)")
+    _style(ax)
+    ax.set_xlabel("수평 이동거리 x (km)")
+    ax.set_ylabel("접선 아래로의 하강거리 (m)")
+    ax.set_ylim(0, max(y_curve_m.max(), y_fall_m.max()) * 1.15)
+    ax.legend(loc="upper left", fontsize=9, frameon=False)
+
+    if v_kms < v_c - 0.02:
+        verdict, vcolor = "낙하거리 > 곡률하강 → 지표에 충돌 (궤도 진입 실패)", RED
+    elif v_kms > v_c + 0.02:
+        verdict, vcolor = "낙하거리 < 곡률하강 → 지표에서 멀어짐 (타원/탈출 궤적)", GREEN
+    else:
+        verdict, vcolor = "낙하거리 = 곡률하강 → 원궤도 (제1우주속도)", PRIMARY
+    ax.set_title(f"고도 {altitude_km:,.0f} km  ·  v = {v_kms:.2f} km/s  →  {verdict}",
+                 fontsize=11, color=vcolor)
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[궤도조건 유도 — 고도 {altitude_km:,.0f} km]")
+    print(f"1) 궤도반경        r = R⊕ + h = {R_EARTH:,.0f} + {altitude_km:,.0f} = {r:,.0f} km")
+    print(f"2) 국소중력        g_r = μ/r² = {g_r * 1000:.4f} m/s²  (지표 9.807 m/s²의 약 {g_r*1000/9.807*100:.1f}%)")
+    print(f"3) 궤도조건        자유낙하거리 = 곡률하강거리 → ½·g_r·t² = x²/(2r),  x=v·t 대입")
+    print(f"                  → v² = g_r·r = (μ/r²)·r = μ/r  →  v_c = √(μ/r)")
+    print(f"4) v_c = √({MU_EARTH:.3e} / {r:,.0f}) = {v_c:.3f} km/s")
+    print(f"   현재 슬라이더 v = {v_kms:.2f} km/s → v_c와 {'일치 (원궤도)' if abs(v_kms-v_c)<0.02 else '불일치'}")
+
+
+def cannonball_curvature_explorer(altitude_km=200):
+    """뉴턴의 포탄: 지정 고도에서 발사속도를 바꿔가며
+    '자유낙하 거리(주황 점선)'와 '지구 곡률에 의한 하강거리(파란 실선)'를 겹쳐 그린다.
+    두 곡선이 정확히 겹치는 지점이 곧 그 고도의 원궤도 속도(v_c=√(μ/r)) — 궤도조건을 눈으로 확인."""
+    r = R_EARTH + altitude_km
+    v_c = np.sqrt(MU_EARTH / r)
+    interact(_plot_cannonball_curvature,
+             v_kms=FloatSlider(value=round(v_c, 2), min=max(5.0, v_c - 3), max=v_c + 3, step=0.05,
+                                description="발사속도(km/s)", readout_format=".2f",
+                                style={"description_width": "100px"}, layout={"width": "500px"}),
+             altitude_km=fixed(altitude_km))
+
+
+# ============================================================
 # 1. 궤도속도 탐색기 (1·2주차 §1.2)
 # ============================================================
 def _plot_orbital_velocity(altitude_km):
