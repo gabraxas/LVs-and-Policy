@@ -318,6 +318,67 @@ def rocket_equation_explorer():
 
 
 # ============================================================
+# 4b. SSTO 실현가능성 탐색기 (2주차 §3.4)
+# ============================================================
+def _plot_ssto_feasibility(delta_v_km_s):
+    isps = [(300, PURPLE, "케로신급"),
+            (350, PRIMARY, "메탄급"),
+            (400, GREEN, "고성능 메탄"),
+            (450, AMBER, "수소/LOX급")]
+    eps_range = np.linspace(0.005, 0.15, 800)
+
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    for isp, color, label in isps:
+        v_e = isp * G0 / 1000  # km/s
+        MR = np.exp(delta_v_km_s / v_e)
+        max_eps = 1.0 / MR
+
+        # m0/m_pl = (1 - ε) / (1/MR - ε), only valid where ε < 1/MR
+        valid = eps_range < max_eps - 1e-4
+        eps_v = eps_range[valid]
+        m0_per_pl = (1 - eps_v) / (1.0 / MR - eps_v)
+        ax.plot(eps_v, m0_per_pl, color=color, linewidth=2.2, zorder=3,
+                label=f"Isp={isp}s ({label})  MR={MR:.1f}, ε_max={max_eps:.3f}")
+        if max_eps < 0.15:
+            ax.axvline(max_eps, color=color, linestyle=":", linewidth=1, alpha=0.4)
+
+    _style(ax)
+    ax.set_yscale("log")
+    ax.set_xlim(0, 0.15)
+    ax.set_ylim(1, 1e3)
+    ax.set_xlabel(r"구조계수 $\varepsilon = m_s / (m_s + m_p)$")
+    ax.set_ylabel(r"이륙질량 / 탑재중량 $m_0 / m_{pl}$ (로그축)")
+    ax.set_title(f"SSTO 실현가능성 — 요구 Δv = {delta_v_km_s:.2f} km/s")
+    ax.legend(loc="upper right", fontsize=8.5, frameon=False)
+
+    # 실현가능 영역(임의 기준: m0/m_pl < 30)
+    ax.axhspan(1, 30, color=GREEN, alpha=0.06, zorder=1)
+    ax.text(0.148, 5, "실현가능\n영역 참고선\n($m_0/m_{pl}<30$)",
+            fontsize=8, color=GREEN, ha="right", va="center")
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[요구 Δv = {delta_v_km_s:.2f} km/s]")
+    print(f"{'Isp(s)':>7} {'v_e(km/s)':>10} {'MR':>8} {'임계 ε_max':>12}")
+    for isp, _, _ in isps:
+        v_e = isp * G0 / 1000
+        MR = np.exp(delta_v_km_s / v_e)
+        max_eps = 1.0 / MR
+        print(f"{isp:>7} {v_e:>10.3f} {MR:>8.2f} {max_eps:>12.4f}")
+    print("→ 실제 구조계수 ε이 임계 ε_max 이상이면 SSTO 실현 불가 (탑재중량비 λ<0)")
+
+
+def ssto_feasibility_explorer():
+    """SSTO 실현가능성 탐색기: 요구 Δv를 바꿔가며 4가지 비추력의
+    '이륙질량/탑재중량' 곡선을 구조계수 함수로 확인한다.
+    각 곡선은 자신의 임계 구조계수(1/MR)에서 발산 — 이 임계선을 넘어가면 물리적으로 SSTO 불가."""
+    interact(_plot_ssto_feasibility,
+             delta_v_km_s=FloatSlider(value=9.4, min=3.0, max=12.0, step=0.1,
+                                       description="요구Δv(km/s)", readout_format=".1f",
+                                       style={"description_width": "100px"}, layout={"width": "500px"}))
+
+
+# ============================================================
 # 5. 탑재중량비·다단화 계산기 (2주차 §3.4, §4.3)
 # ============================================================
 def _plot_staging(isp_s, epsilon, delta_v_km_s, n_stages):
