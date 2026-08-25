@@ -2382,3 +2382,211 @@ def tam_sam_som_funnel():
              som_pct=FloatSlider(value=10, min=1, max=100, step=1,
                                   description="SOM 비중(%)",
                                   style={"description_width": "120px"}, layout={"width": "460px"}))
+
+
+# ============================================================
+# 42. 인공위성 궤도 6요소 3D 탐색기 (4주차 보충 §01 MISSION ANALYSIS)
+# ============================================================
+def _orbit_perifocal_to_eci(vec_pf, raan_rad, i_rad, argp_rad):
+    """근점(perifocal) 좌표계 벡터를 지구중심관성(ECI) 좌표계로 회전 변환한다.
+    R = R3(-RAAN) R1(-i) R3(-argp)"""
+    co, so = np.cos(argp_rad), np.sin(argp_rad)
+    ci, si = np.cos(i_rad), np.sin(i_rad)
+    cO, sO = np.cos(raan_rad), np.sin(raan_rad)
+
+    R = np.array([
+        [cO * co - sO * so * ci, -cO * so - sO * co * ci, sO * si],
+        [sO * co + cO * so * ci, -sO * so + cO * co * ci, -cO * si],
+        [so * si, co * si, ci],
+    ])
+    return R @ vec_pf
+
+
+def _plot_orbital_elements(a_km, e, i_deg, raan_deg, argp_deg, nu_deg):
+    i_r, raan_r, argp_r, nu_r = np.radians([i_deg, raan_deg, argp_deg, nu_deg])
+    p = a_km * (1 - e ** 2)
+
+    nus = np.linspace(0, 2 * np.pi, 300)
+    r = p / (1 + e * np.cos(nus))
+    pf = np.vstack([r * np.cos(nus), r * np.sin(nus), np.zeros_like(nus)])
+    eci = np.array([_orbit_perifocal_to_eci(pf[:, k], raan_r, i_r, argp_r) for k in range(pf.shape[1])]).T
+
+    r_sat = p / (1 + e * np.cos(nu_r))
+    sat_pf = np.array([r_sat * np.cos(nu_r), r_sat * np.sin(nu_r), 0.0])
+    sat_eci = _orbit_perifocal_to_eci(sat_pf, raan_r, i_r, argp_r)
+
+    node_pf = np.array([p / (1 + e * np.cos(-argp_r)), 0.0, 0.0])
+    node_dir = _orbit_perifocal_to_eci(np.array([1.0, 0.0, 0.0]), raan_r, i_r, argp_r)
+
+    fig = plt.figure(figsize=(7.5, 7.5))
+    ax = fig.add_subplot(111, projection="3d")
+
+    u, v = np.meshgrid(np.linspace(0, 2 * np.pi, 24), np.linspace(0, np.pi, 14))
+    xs = R_EARTH * np.cos(u) * np.sin(v)
+    ys = R_EARTH * np.sin(u) * np.sin(v)
+    zs = R_EARTH * np.cos(v)
+    ax.plot_wireframe(xs, ys, zs, color="#B0B0B0", linewidth=0.4, alpha=0.5)
+
+    th = np.linspace(0, 2 * np.pi, 100)
+    eq_r = a_km * 1.15
+    ax.plot(eq_r * np.cos(th), eq_r * np.sin(th), np.zeros_like(th), color=INK_MUTED, linestyle=":", linewidth=1,
+            label="적도면(춘분점 기준)")
+
+    ax.plot(eci[0], eci[1], eci[2], color=PRIMARY, linewidth=2.2, label="궤도")
+    ax.plot([0, node_dir[0] * eq_r], [0, node_dir[1] * eq_r], [0, node_dir[2] * eq_r],
+            color=GREEN, linewidth=1.6, linestyle="--", label="승교점 방향")
+    ax.scatter(*sat_eci, color=AMBER, s=90, zorder=5, label=f"위성 (ν={nu_deg:.0f}°)")
+    ax.scatter([0], [0], [0], color=INK, s=40)
+
+    lim = max(a_km * (1 + e), eq_r) * 1.05
+    ax.set_xlim(-lim, lim)
+    ax.set_ylim(-lim, lim)
+    ax.set_zlim(-lim, lim)
+    ax.set_box_aspect([1, 1, 1])
+    ax.set_xlabel("X (km)")
+    ax.set_ylabel("Y (km)")
+    ax.set_zlabel("Z (km, 지구 자전축)")
+    ax.set_title(f"a={a_km:,.0f}km, e={e:.2f}, i={i_deg:.0f}°, Ω={raan_deg:.0f}°, ω={argp_deg:.0f}°")
+    ax.legend(loc="upper left", fontsize=8)
+    plt.tight_layout()
+    plt.show()
+
+    r_p, r_a = a_km * (1 - e), a_km * (1 + e)
+    print(f"[궤도 크기·모양]  근지점 고도={r_p - R_EARTH:,.0f}km, 원지점 고도={r_a - R_EARTH:,.0f}km")
+    print(f"[궤도면 방향]     경사각 i={i_deg:.1f}°(0°=적도궤도, 90°=극궤도, >90°=역행), "
+          f"RAAN Ω={raan_deg:.1f}°, 근점편각 ω={argp_deg:.1f}°")
+    print(f"[위성 위치]       진근점이각 ν={nu_deg:.1f}° → 현재 반경={r_sat:,.0f}km "
+          f"(지표 고도 {r_sat - R_EARTH:,.0f}km)")
+
+
+def orbital_elements_explorer():
+    """6개 궤도요소(a, e, i, Ω, ω, ν) 슬라이더로 3차원 궤도 형상·방향·위성 위치를
+    동시에 확인한다 — 크기/모양 2개, 궤도면 방향 3개, 위성 현재위치 1개 구조를 체득."""
+    interact(_plot_orbital_elements,
+             a_km=FloatSlider(value=7178, min=6578, max=26578, step=100,
+                               description="장반경 a(km)", readout_format=",.0f",
+                               style={"description_width": "110px"}, layout={"width": "480px"}),
+             e=FloatSlider(value=0.0, min=0.0, max=0.8, step=0.01,
+                            description="이심률 e",
+                            style={"description_width": "110px"}, layout={"width": "480px"}),
+             i_deg=FloatSlider(value=97.4, min=0, max=180, step=1,
+                                description="경사각 i(°)",
+                                style={"description_width": "110px"}, layout={"width": "480px"}),
+             raan_deg=FloatSlider(value=0, min=0, max=360, step=5,
+                                   description="RAAN Ω(°)",
+                                   style={"description_width": "110px"}, layout={"width": "480px"}),
+             argp_deg=FloatSlider(value=0, min=0, max=360, step=5,
+                                   description="근점편각 ω(°)",
+                                   style={"description_width": "110px"}, layout={"width": "480px"}),
+             nu_deg=FloatSlider(value=0, min=0, max=360, step=5,
+                                 description="진근점이각 ν(°)",
+                                 style={"description_width": "110px"}, layout={"width": "480px"}))
+
+
+# ============================================================
+# 43. 태양동기궤도(SSO) J2 세차 탐색기 (4주차 보충 §03 SSO)
+# ============================================================
+def _plot_sso(altitude_km, inclination_deg):
+    J2 = 1.08263e-3
+    SSO_DRIFT_DEG_DAY = 360.0 / 365.2422  # ≈ 0.9856 deg/day, 지구 공전 각속도
+
+    alts = np.linspace(300, 1500, 300)
+    a_arr = R_EARTH + alts
+    n_arr = np.sqrt(MU_EARTH / a_arr ** 3)  # rad/s
+    n_deg_day = np.degrees(n_arr) * 86400
+    # cos(i) = drift_target / (-1.5 * n * J2 * (Re/a)^2)   (원궤도 e≈0 → p≈a)
+    cos_i = SSO_DRIFT_DEG_DAY / (-1.5 * n_deg_day * J2 * (R_EARTH / a_arr) ** 2)
+    cos_i = np.clip(cos_i, -1, 1)
+    i_sso = np.degrees(np.arccos(cos_i))
+
+    a_sel = R_EARTH + altitude_km
+    n_sel = np.sqrt(MU_EARTH / a_sel ** 3)
+    n_sel_deg_day = np.degrees(n_sel) * 86400
+    raan_dot = -1.5 * n_sel_deg_day * J2 * (R_EARTH / a_sel) ** 2 * np.cos(np.radians(inclination_deg))
+    i_req = np.degrees(np.arccos(np.clip(
+        SSO_DRIFT_DEG_DAY / (-1.5 * n_sel_deg_day * J2 * (R_EARTH / a_sel) ** 2), -1, 1)))
+
+    fig, ax = plt.subplots(figsize=(8, 5.2))
+    ax.plot(alts, i_sso, color=PRIMARY, linewidth=2.4, label="SSO 조건선 (Ω̇=+0.9856°/day)")
+    _style(ax)
+    ax.set_xlabel("궤도 고도 (km)")
+    ax.set_ylabel("궤도 경사각 (°)")
+    ax.set_ylim(90, 106)
+
+    on_sso = abs(raan_dot - SSO_DRIFT_DEG_DAY) < 0.01
+    mcolor = GREEN if on_sso else RED
+    ax.plot(altitude_km, inclination_deg, "o", color=mcolor, markersize=11, zorder=5,
+            label=f"현재 선택 ({'SSO 성립' if on_sso else 'SSO 불성립'})")
+    ax.plot(altitude_km, i_req, "x", color=AMBER, markersize=9, zorder=5,
+            label=f"이 고도의 SSO 요구경사각={i_req:.2f}°")
+    ax.axvline(altitude_km, color=INK_MUTED, linestyle="--", linewidth=0.8, alpha=0.6)
+    ax.set_title(f"고도 {altitude_km:,.0f}km, i={inclination_deg:.1f}° → Ω̇={raan_dot:+.4f}°/day")
+    ax.legend(loc="upper left", fontsize=8.5)
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[J2 세차] J2={J2:.5e}, 목표 세차율(지구 공전각속도)=+{SSO_DRIFT_DEG_DAY:.4f}°/day")
+    print(f"[현재 조건] 고도={altitude_km:,.0f}km, i={inclination_deg:.1f}° → 실제 RAAN 세차율 Ω̇={raan_dot:+.4f}°/day")
+    print(f"[SSO 성립 조건] 같은 고도에서 필요한 경사각 = {i_req:.2f}° (현재값과 차이 {inclination_deg - i_req:+.2f}°)")
+    if on_sso:
+        print("  → SSO 조건 성립: 궤도면이 태양과 이루는 각이 고정되어 승교선 지방시(LTAN)가 유지됨")
+    else:
+        print("  → SSO 조건 미성립: 경사각을 조정하거나 고도를 바꿔 Ω̇이 +0.9856°/day가 되도록 맞춰야 함")
+
+
+def sso_explorer():
+    """지구 편평도(J2)에 의한 승교점 세차(RAAN drift)를 계산하고, 태양동기궤도(SSO) 조건
+    (Ω̇ = 지구 공전각속도 ≈ +0.9856°/day)을 만족하는 고도-경사각 조합을 탐색한다."""
+    interact(_plot_sso,
+             altitude_km=FloatSlider(value=700, min=300, max=1500, step=10,
+                                      description="고도(km)",
+                                      style={"description_width": "100px"}, layout={"width": "480px"}),
+             inclination_deg=FloatSlider(value=98.19, min=90, max=106, step=0.1,
+                                          description="경사각(°)",
+                                          style={"description_width": "100px"}, layout={"width": "480px"}))
+
+
+# ============================================================
+# 44. 위성 정찰·통신 영역(footprint) 탐색기 (4주차 보충 §04 FOOTPRINT)
+# ============================================================
+def _plot_footprint(altitude_km, elevation_deg):
+    rho = np.degrees(np.arcsin(R_EARTH / (R_EARTH + altitude_km)))  # 위성에서 본 지구 각반경
+    eps_arr = np.linspace(0.1, 89.9, 300)
+    eta_arr = np.degrees(np.arcsin(np.sin(np.radians(rho)) * np.cos(np.radians(eps_arr))))
+    lam_arr = 90 - eps_arr - eta_arr
+    fp_r_arr = R_EARTH * np.radians(lam_arr)
+
+    eta_sel = np.degrees(np.arcsin(np.sin(np.radians(rho)) * np.cos(np.radians(elevation_deg))))
+    lam_sel = 90 - elevation_deg - eta_sel
+    fp_r_sel = R_EARTH * np.radians(lam_sel)
+    cover_pct = (1 - np.cos(np.radians(lam_sel))) / 2 * 100
+
+    fig, ax = plt.subplots(figsize=(8, 5.2))
+    ax.plot(eps_arr, fp_r_arr, color=PRIMARY, linewidth=2.4)
+    _style(ax)
+    ax.set_xlabel("최소 앙각(elevation angle, °) — 관측/통신 가능 최저각")
+    ax.set_ylabel("지표 정찰·통신 반경 (km)")
+    ax.plot(elevation_deg, fp_r_sel, "o", color=AMBER, markersize=10, zorder=5)
+    ax.axvline(elevation_deg, color=INK_MUTED, linestyle="--", linewidth=0.8, alpha=0.6)
+
+    mode = "저궤도 정찰/관측 위성" if altitude_km < 3000 else ("중궤도 위성" if altitude_km < 20000 else "정지궤도 통신위성")
+    ax.set_title(f"고도 {altitude_km:,.0f}km ({mode}) · 앙각 {elevation_deg:.0f}° → 지표 반경 {fp_r_sel:,.0f}km")
+    plt.tight_layout()
+    plt.show()
+
+    print(f"[기하] 지구 각반경 ρ={rho:.2f}°, 위성 nadir각 η={eta_sel:.2f}°, 지구중심각 λ={lam_sel:.2f}°")
+    print(f"[결과] 지표 정찰/통신 반경={fp_r_sel:,.0f}km, 지구 표면적 대비 커버리지≈{cover_pct:.2f}%")
+    print("  → 정찰위성: 이 반경이 곧 관측 스와스(swath) 산정의 기하학적 상한")
+    print("  → 통신위성: 이 반경이 곧 지상국이 동시 가시(line-of-sight) 가능한 서비스 영역")
+
+
+def ground_footprint_explorer():
+    """위성 고도와 최소 앙각(elevation angle)으로부터 지표 정찰영역(footprint)·통신 가시영역의
+    반경을 기하학적으로 산출한다 — 저궤도 정찰위성부터 정지궤도 통신위성까지 공통 적용."""
+    interact(_plot_footprint,
+             altitude_km=FloatSlider(value=700, min=300, max=36000, step=100,
+                                      description="고도(km)", readout_format=",.0f",
+                                      style={"description_width": "100px"}, layout={"width": "480px"}),
+             elevation_deg=FloatSlider(value=10, min=0.1, max=80, step=0.5,
+                                        description="최소 앙각(°)",
+                                        style={"description_width": "100px"}, layout={"width": "480px"}))
