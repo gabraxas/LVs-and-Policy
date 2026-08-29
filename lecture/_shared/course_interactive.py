@@ -2590,3 +2590,116 @@ def ground_footprint_explorer():
              elevation_deg=FloatSlider(value=10, min=0.1, max=80, step=0.5,
                                         description="최소 앙각(°)",
                                         style={"description_width": "100px"}, layout={"width": "480px"}))
+
+
+# ============================================================
+# 45. 추력방정식 연소기-노즐 형상 다이어그램 (2주차 §2.2, 정적 다이어그램)
+# ============================================================
+def _nozzle_contour(Rt=1.0, Rc=2.45, Lc=3.2, hc_deg=30.0,
+                     R1=1.5, R2=1.0, Rn_frac=0.382,
+                     eps=16.0, theta_n_deg=28.0, theta_e_deg=10.0,
+                     bell_frac=0.8, x0=0.0, n=160):
+    """실제 액체로켓 연소기-노즐(축대칭) 실루엣을 근사 생성한다.
+    연소실(원통) → 필렛(R1)+원뿔(hc) 수축부 → 필렛(R2) 목(throat)
+    → Rao 근사 벨(bell) 팽창부(N→E, 2차 베지어) 순서로 좌표를 이어붙인다.
+    수치는 강의 시각화용 근사이며 실제 엔진 설계값이 아니다."""
+    hc = np.radians(hc_deg)
+    theta_n = np.radians(theta_n_deg)
+    theta_e = np.radians(theta_e_deg)
+    Re = Rt * np.sqrt(eps)
+    Rn = Rn_frac * Rt
+
+    x1 = x0 + Lc
+    xs_cham = np.array([x0, x1]); rs_cham = np.array([Rc, Rc])
+
+    phi = np.linspace(0, hc, n)
+    xs_f1 = x1 + R1 * np.sin(phi)
+    rs_f1 = (Rc - R1) + R1 * np.cos(phi)
+    Ax, Ar = xs_f1[-1], rs_f1[-1]
+
+    rB = Rt + R2 * (1 - np.cos(hc))
+    Lcone = (Ar - rB) / np.tan(hc)
+    Bx = Ax + Lcone * np.cos(hc); Br = Ar - Lcone * np.sin(hc)
+    xs_cone = np.array([Ax, Bx]); rs_cone = np.array([Ar, Br])
+
+    phi2 = np.linspace(hc, 0, n)
+    C2x = Bx + R2 * np.sin(hc); C2r = Br + R2 * np.cos(hc)
+    xs_f2 = C2x - R2 * np.sin(phi2)
+    rs_f2 = C2r - R2 * np.cos(phi2)
+    Tx, Tr = xs_f2[-1], rs_f2[-1]
+
+    phi3 = np.linspace(0, theta_n, n)
+    xs_f3 = Tx + Rn * np.sin(phi3)
+    rs_f3 = Rt + Rn * (1 - np.cos(phi3))
+    Nx, Nr = xs_f3[-1], rs_f3[-1]
+
+    Lc15 = (Re - Rt) / np.tan(np.radians(15.0))
+    Ln = bell_frac * Lc15
+    Ex, Er = Tx + Ln, Re
+
+    m1, m2 = np.tan(theta_n), np.tan(theta_e)
+    Qx = ((Er - Nr) - Ex * m2 + Nx * m1) / (m1 - m2)
+    Qr = m1 * (Qx - Nx) + Nr
+    t = np.linspace(0, 1, n)
+    xs_bell = (1 - t) ** 2 * Nx + 2 * (1 - t) * t * Qx + t ** 2 * Ex
+    rs_bell = (1 - t) ** 2 * Nr + 2 * (1 - t) * t * Qr + t ** 2 * Er
+
+    xs = np.concatenate([xs_cham, xs_f1, xs_cone, xs_f2, xs_f3, xs_bell])
+    rs = np.concatenate([rs_cham, rs_f1, rs_cone, rs_f2, rs_f3, rs_bell])
+    return xs, rs, dict(Tx=Tx, Tr=Tr, Ex=Ex, Er=Er, x0=x0, x1=x1, Rc=Rc)
+
+
+def thrust_equation_schematic():
+    """추력방정식(모멘텀항+압력항)을 실제 액체로켓 연소기-노즐 형상(축대칭 벨 노즐 근사)
+    위에 겹쳐 보여준다 (정적 다이어그램 — 슬라이더 없음). 연소실·목(throat)·출구 및
+    F, v_e를 표시하여 각 변수가 실제 형상 어디에 대응하는지 직관적으로 잇는다."""
+    CHAMBER_FILL = "#F6DEB9"
+    NOZZLE_FILL = "#DCEBFA"
+
+    xs, rs, info = _nozzle_contour()
+    fig, ax = plt.subplots(figsize=(11, 6))
+    Tx = info["Tx"]
+    mask_ch = xs <= Tx
+    mask_nz = xs >= Tx
+
+    ax.fill_between(xs[mask_ch], rs[mask_ch], -rs[mask_ch], color=CHAMBER_FILL, zorder=2)
+    ax.fill_between(xs[mask_nz], rs[mask_nz], -rs[mask_nz], color=NOZZLE_FILL, zorder=2)
+    ax.plot(xs, rs, color=INK, linewidth=2.2, zorder=4)
+    ax.plot(xs, -rs, color=INK, linewidth=2.2, zorder=4)
+    ax.plot([info["x0"], info["x0"]], [-info["Rc"], info["Rc"]], color=INK, linewidth=2.2, zorder=4)
+    ax.plot([Tx, Tx], [-info["Tr"], info["Tr"]], color=INK_MUTED, linewidth=1.0,
+            linestyle=(0, (3, 2)), zorder=3)
+
+    ax.set_xlim(info["x0"] - 1.5, info["Ex"] + 1.8)
+    ax.set_ylim(-info["Rc"] - 1.0, info["Rc"] + 2.3)
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+    ax.annotate("", xy=(info["x0"] - 1.3, 0), xytext=(info["x0"] - 0.1, 0),
+                arrowprops=dict(arrowstyle="-|>", color=AMBER, linewidth=2.6))
+    ax.text(info["x0"] - 1.35, 0.35, "F (추력)", color=AMBER, fontsize=12,
+            fontweight="bold", ha="left")
+
+    ax.annotate("", xy=(info["Ex"] + 1.5, 0), xytext=(info["Ex"] + 0.1, 0),
+                arrowprops=dict(arrowstyle="-|>", color=PRIMARY, linewidth=2.6))
+    ax.text(info["Ex"] + 0.2, 0.35, r"$v_e$ (배기속도)", color=PRIMARY, fontsize=12,
+            fontweight="bold", ha="left")
+
+    ax.text((info["x0"] + info["x1"]) / 2, 0, "연소실\n$p_c, T_c$", ha="center", va="center",
+            fontsize=11.5, color=INK, fontweight="bold")
+
+    ax.annotate("목(throat) $A_t$", xy=(Tx, info["Tr"]), xytext=(Tx - 0.3, info["Rc"] + 1.7),
+                fontsize=11, color=INK_MUTED, ha="center",
+                arrowprops=dict(arrowstyle="-", color=INK_MUTED, linewidth=1.0))
+    ax.annotate("출구 $A_e, p_e$", xy=(info["Ex"], info["Er"]), xytext=(info["Ex"] + 0.1, info["Rc"] + 1.7),
+                fontsize=11, color=INK_MUTED, ha="center",
+                arrowprops=dict(arrowstyle="-", color=INK_MUTED, linewidth=1.0))
+
+    ax.set_title("추력 방정식 — 모멘텀항과 압력항", fontsize=14, color=INK, pad=14)
+    fig.text(0.5, 0.02, r"$F = \dot{m}\,v_e + (p_e - p_a)A_e$", ha="center", fontsize=15, color=INK)
+    plt.tight_layout(rect=[0, 0.05, 1, 1])
+    plt.show()
+    print("실제 액체로켓 연소기-노즐 형상 근사: 원통형 연소실 → 수축부(필렛+원뿔) → 목(throat)")
+    print("→ Rao 근사 벨(bell) 팽창부 → 출구. 벨 노즐은 동일 팽창비의 원뿔형(15°) 노즐보다")
+    print("짧으면서도 유사한 성능을 내도록 목 부근에서 급격히 꺾인 뒤 출구 쪽으로 갈수록")
+    print("완만해지는 곡선 윤곽을 가진다 (Falcon 9 Merlin, RS-25 등 실제 엔진의 전형적 형상).")
