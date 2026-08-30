@@ -2948,142 +2948,222 @@ def irig_tone_explorer():
 
 
 def iip_trajectory_explorer():
-    """순시낙하점(IIP)을 실시간으로 계산하고, 발사체 궤적 위에 IIP 궤적을 겹쳐 표시.
-    초기 속도·경로각·고도를 슬라이더로 변경하면 IIP 궤적이 업데이트된다."""
+    """동력 비행 중 IIP(순시낙하점)가 어떻게 변화하는지 보여주는 탐색기.
+
+    수정된 버그 3건:
+      Bug1 — dv = (0 - g*sin) : 추력항 0 → 자유낙하 시뮬레이션 → 동력 비행 방정식으로 수정
+      Bug2 — v₀=6.5 km/s 기본값 : 이미 궤도 속도 근처 → 전구간 NaN → v=300m/s 저속 출발로 변경
+      Bug3 — Ahn-Roh 케플러 공식 : 저속(lam<<1)·급경사에서 cos_phi>1 발산
+              → 물리적으로 정확한 tan(φ/2) 탄도 범위 공식으로 교체
+                tan(φ/2) = v²·r·sin(γ)·cos(γ) / (μ − v²·r·cos²(γ))
+    """
     import numpy as np
     import matplotlib.pyplot as plt
     import ipywidgets as widgets
     from IPython.display import display
 
-    MU = 3.986e14   # m^3/s^2
-    Re = 6.371e6    # m
+    MU = 3.986004418e14   # m³/s²
+    Re = 6.371e6           # m
 
-    def kepler_iip(r0_m, v0_ms, gamma0_rad):
-        """구형 지구 비반복형 IIP. 비행각 φ → 낙하 거리(호)·체공시간 반환."""
-        lam = v0_ms**2 / (MU / r0_m)
-        cos_g = np.cos(gamma0_rad)
-        sin_g = np.sin(gamma0_rad)
-        rp = Re          # 구형 지구 가정
+    # ── Bug3 수정: 물리적으로 정확한 IIP 공식 ─────────────────────────────
+    def compute_iip(r, v, gamma_rad):
+        """
+        구형 지구 탄도 범위 공식 (Gauss / 고전 탄도학).
+        tan(φ/2) = v²·r·sin(γ)·cos(γ) / (μ − v²·r·cos²(γ))
 
-        A = 1 - lam * cos_g**2
-        B = (1 - (r0_m / rp) * lam * cos_g**2) * cos_g**2
-        disc = A**2 - B
-        if disc < 0:
-            return None, None
-        cos_phi = (A - np.sqrt(disc)) / (1 - (r0_m / rp) * cos_g**2)
-        cos_phi = np.clip(cos_phi, -1, 1)
-        phi = np.arccos(cos_phi)          # 비행각(호)
+        - 저속(300 m/s, γ=75°) → φ ≈ 5 km   ← 물리적으로 옳음
+        - 중속(3 km/s, γ=50°)  → φ ≈ 974 km  ← 물리적으로 옳음
+        - 고속(7.8 km/s, γ=10°)→ φ ≈ 17,000 km ← 거의 반궤도
+        - 궤도 속도 초과        → denom ≤ 0  → NaN  (궤도 진입)
+        """
+        if v < 50.0 or r <= Re:
+            return np.nan, np.nan
+        sg  = np.sin(gamma_rad)
+        cg  = np.cos(gamma_rad)
+        num   = v * v * r * sg * cg
+        denom = MU - v * v * r * cg * cg
+        if denom <= 0.0:          # 궤도/탈출 속도 초과 → IIP 정의 불가
+            return np.nan, np.nan
+        phi_rad  = 2.0 * np.arctan(num / denom)
+        dist_km  = phi_rad * Re / 1e3
+        return dist_km, np.degrees(phi_rad)
 
-        # 체공시간 근사 (Zarchan 기반 반해석적)
-        e = np.sqrt(1 - lam * cos_g**2 * r0_m / Re)
-        if e >= 1:
-            return phi, None
-        a = r0_m / (2 - lam * r0_m / Re)
-        if a <= 0:
-            return phi, None
-        n = np.sqrt(MU / a**3)
-        # 진이각 변화 → 체공시간
-        E0 = 2 * np.arctan(np.tan(gamma0_rad / 2) * np.sqrt((1-e)/(1+e))) if abs(e) < 1 else 0
-        tf_est = phi * np.sqrt(r0_m**3 / MU)
-        return phi, tf_est
+    # ── Bug1·2 수정: 동력 비행 시뮬레이션 ────────────────────────────────
+    def simulate_powered(thrust_g, gamma0_deg, h0_km, dt=2.0, tmax=700.0):
+        """
+        Bug1 수정: vdot = a_thrust - grav*sin(γ)  (추력항 추가)
+        Bug2 수정: v = 300 m/s에서 출발 (발사 초기 ~ 저속)
+        """
+        r = Re + h0_km * 1e3
+        v = 300.0                         # m/s — 피치오버 직후 초기 속도
+        g = np.radians(gamma0_deg)
+        a_thrust = thrust_g * 9.81        # m/s²  순 추력 가속도
 
-    def simulate_flight(v0_kms, gamma0_deg, h0_km, t_end=600):
-        v0  = v0_kms * 1000
-        g0  = np.radians(gamma0_deg)
-        r0  = Re + h0_km * 1000
-        dt  = 2.0
-        ts  = np.arange(0, t_end, dt)
-        rs, gs, iips = [], [], []
-        r, v, g = r0, v0, g0
-        for t in ts:
-            rs.append(r - Re)
-            gs.append(np.degrees(g))
-            phi, _ = kepler_iip(r, v, g)
-            iips.append(np.degrees(phi) if phi is not None else np.nan)
-            # 간단 중력 턴 시뮬레이션
-            a_grav = -MU / r**2
-            a_r  = v**2 / r + a_grav * np.sin(g)   # 간략화
-            dg   = (-MU / r**2 / v + v / r) * np.cos(g) * dt
-            dv   = (0 - MU / r**2 * np.sin(g)) * dt
-            dh   = v * np.sin(g) * dt
-            g   += dg
-            v   = max(v + dv, 100)
-            r   = max(r + dh, Re + 100)
-        return ts, np.array(rs)/1000, np.array(gs), np.array(iips)
+        ts, hs, vs, dists, phis = [], [], [], [], []
 
+        for ti in np.arange(0.0, tmax, dt):
+            grav  = MU / r ** 2
+            v_orb = np.sqrt(MU / r)
+
+            dist_km, phi_deg = compute_iip(r, v, g)
+            ts.append(ti);    hs.append((r - Re) / 1e3)
+            vs.append(v / 1e3); dists.append(dist_km); phis.append(phi_deg)
+
+            # 동력 비행 방정식 (Bug1 핵심 수정)
+            vdot = a_thrust - grav * np.sin(g)         # 추력 + 중력 접선 성분
+            gdot = np.cos(g) * (v / r - grav / v) if v > 80 else 0.0  # 중력 턴
+            rdot = v * np.sin(g)                        # 반경 변화율
+
+            v = max(v + vdot * dt, 50.0)
+            g = float(np.clip(g + gdot * dt, np.radians(1.0), np.radians(89.0)))
+            r = max(r + rdot * dt, Re + 500)
+
+            if v >= v_orb: break           # 궤도 속도 도달
+            if r >= Re + 1500e3: break     # 1,500 km 초과
+            if r <= Re + 200: break        # 지표 충돌
+
+        return (np.array(ts), np.array(hs), np.array(vs),
+                np.array(dists), np.array(phis))
+
+    # ── 위젯 UI ───────────────────────────────────────────────────────────
     out = widgets.Output()
-    v0_sl  = widgets.FloatSlider(value=6.5, min=1.0, max=9.5, step=0.1,
-                                 description='초기속도 (km/s)', style={'description_width':'130px'},
-                                 layout=widgets.Layout(width='450px'))
-    g0_sl  = widgets.FloatSlider(value=30, min=5, max=85, step=1,
-                                 description='비행경로각 (°)', style={'description_width':'130px'},
-                                 layout=widgets.Layout(width='450px'))
-    h0_sl  = widgets.FloatSlider(value=100, min=20, max=400, step=10,
-                                 description='초기고도 (km)', style={'description_width':'130px'},
-                                 layout=widgets.Layout(width='450px'))
 
-    def draw(v0, g0, h0):
+    thrust_sl = widgets.FloatSlider(
+        value=2.5, min=0.5, max=5.0, step=0.1,
+        description='순 추력 (×g)', style={'description_width': '130px'},
+        layout=widgets.Layout(width='460px'))
+
+    gamma_sl = widgets.FloatSlider(
+        value=75.0, min=45.0, max=88.0, step=1.0,
+        description='초기 경로각 γ₀ (°)', style={'description_width': '130px'},
+        layout=widgets.Layout(width='460px'))
+
+    h0_sl = widgets.FloatSlider(
+        value=10.0, min=1.0, max=60.0, step=1.0,
+        description='피치오버 고도 (km)', style={'description_width': '130px'},
+        layout=widgets.Layout(width='460px'))
+
+    def draw(thrust_g, gamma0, h0):
+        ts, hs, vs, dists, phis = simulate_powered(thrust_g, gamma0, h0)
+        valid = ~np.isnan(dists)
+
         with out:
             out.clear_output(wait=True)
-            ts, hs, gs, iips = simulate_flight(v0, g0, h0, t_end=500)
-            valid = ~np.isnan(iips)
-
-            fig, axes = plt.subplots(1, 3, figsize=(14, 4.5))
+            fig, axes = plt.subplots(1, 3, figsize=(14, 5))
             fig.patch.set_facecolor('#F7F9FC')
-            BLUE = '#1A6EA8'; ORG = '#E07B39'; RED = '#C0392B'
+            BLUE = '#1A6EA8'; ORG = '#E07B39'; RED = '#C0392B'; GRN = '#27AE60'
 
+            # ── 패널 1: 고도·속도 이중축 ──
             ax0 = axes[0]
-            ax0.plot(ts[valid], hs[valid], color=BLUE, lw=2, label='고도')
-            ax0.set_xlabel('시간 (s)'); ax0.set_ylabel('고도 (km)')
-            ax0.set_title('발사체 고도 변화', fontweight='bold')
-            ax0.set_facecolor('#FAFBFC'); ax0.grid(alpha=0.3)
+            ln1, = ax0.plot(ts, hs, color=BLUE, lw=2.2, label='고도 (km)')
+            ax0.set_xlabel('시간 (s)', fontsize=9)
+            ax0.set_ylabel('고도 (km)', color=BLUE, fontsize=9)
+            ax0.tick_params(axis='y', labelcolor=BLUE)
+            ax0b = ax0.twinx()
+            ln2, = ax0b.plot(ts, vs, color=ORG, lw=2, ls='--', label='속도 (km/s)')
+            v_orb_ref = np.sqrt(MU / (Re + max(hs[-1], 0) * 1e3)) / 1e3
+            ax0b.axhline(v_orb_ref, color=RED, lw=1.2, ls=':', alpha=0.8)
+            ax0b.text(ts[0] + (ts[-1]-ts[0])*0.04, v_orb_ref + 0.08,
+                      f'궤도속도\n≈{v_orb_ref:.1f}km/s', fontsize=7.5, color=RED)
+            ax0b.set_ylabel('속도 (km/s)', color=ORG, fontsize=9)
+            ax0b.tick_params(axis='y', labelcolor=ORG)
+            ax0.legend([ln1, ln2], [ln1.get_label(), ln2.get_label()],
+                       fontsize=8, loc='upper left')
+            ax0.set_title('동력 비행 — 고도 & 속도\n(Bug1·2 수정: 추력 추가, 저속 출발)', fontweight='bold', fontsize=9)
+            ax0.set_facecolor('#FAFBFC'); ax0.grid(alpha=0.25)
+            ax0.spines[['top', 'right']].set_visible(False)
 
+            # ── 패널 2: IIP 낙하거리 시계열 ──
             ax1 = axes[1]
-            ax1.plot(ts[valid], iips[valid], color=ORG, lw=2.5, label='IIP (°)')
-            ax1.axhline(0, color='#888', lw=1, ls='--')
-            max_iip = np.nanmax(iips) if valid.any() else 0
             if valid.any():
-                ax1.axhline(max_iip, color=RED, lw=1.2, ls=':', alpha=0.6)
-                ax1.text(ts[valid][-1]*0.6, max_iip+0.5,
-                         f'최대 IIP: {max_iip:.1f}°\n(≈ {max_iip*111:.0f} km)', fontsize=9, color=RED)
-            ax1.set_xlabel('시간 (s)'); ax1.set_ylabel('IIP 비행각 (°)')
-            ax1.set_title('IIP(순시낙하점) 비행각 변화', fontweight='bold')
-            ax1.set_facecolor('#FAFBFC'); ax1.grid(alpha=0.3)
+                ax1.plot(ts[valid], dists[valid], color=ORG, lw=2.5)
+                ax1.fill_between(ts[valid], 0, dists[valid], alpha=0.13, color=ORG)
 
+                last_v = int(np.where(valid)[0][-1])
+                if last_v < len(ts) - 1:
+                    ax1.axvline(ts[last_v], color=GRN, lw=1.8, ls='--')
+                    ax1.text(ts[last_v] + 1, np.nanmax(dists) * 0.5,
+                             '궤도 진입\n→ IIP 소멸', fontsize=8.5, color=GRN, fontweight='bold')
+
+                ax1.text(0.97, 0.97,
+                         f'최대 IIP\n{np.nanmax(dists):,.0f} km',
+                         transform=ax1.transAxes, ha='right', va='top', fontsize=9,
+                         color=RED, fontweight='bold',
+                         bbox=dict(boxstyle='round', facecolor='#FDEDEC', alpha=0.85))
+
+                # 파괴선 예시 (Ec 기준 가상 위험선)
+                danger_km = 800
+                ax1.axhline(danger_km, color='#8E44AD', lw=1.3, ls='-.', alpha=0.7)
+                ax1.text(ts[0], danger_km + 30, '⚠️ 가상 파괴선(예시)',
+                         fontsize=7.5, color='#8E44AD')
+            else:
+                ax1.text(0.5, 0.5, '⚠️ 전 구간 궤도 진입 상태\n슬라이더를 조정하세요',
+                         ha='center', va='center', transform=ax1.transAxes,
+                         fontsize=10, color=RED)
+
+            ax1.set_xlabel('시간 (s)', fontsize=9)
+            ax1.set_ylabel('IIP 낙하거리 (km)', fontsize=9)
+            ax1.set_title('IIP 낙하거리 시계열\n(Bug3 수정: tan(φ/2) 공식 적용)',
+                          fontweight='bold', fontsize=9)
+            ax1.set_facecolor('#FAFBFC'); ax1.grid(alpha=0.25); ax1.set_ylim(bottom=0)
+            ax1.spines[['top', 'right']].set_visible(False)
+
+            # ── 패널 3: 속도–IIP 위상도 ──
             ax2 = axes[2]
             if valid.any():
-                sc = ax2.scatter(iips[valid], hs[valid],
-                                 c=ts[valid], cmap='plasma', s=15, alpha=0.8, zorder=3)
-                plt.colorbar(sc, ax=ax2, label='시간 (s)', shrink=0.85)
-            ax2.set_xlabel('IIP 비행각 (°)'); ax2.set_ylabel('발사체 고도 (km)')
-            ax2.set_title('고도 vs IIP 궤적 상관', fontweight='bold')
-            ax2.set_facecolor('#FAFBFC'); ax2.grid(alpha=0.3)
+                sc = ax2.scatter(vs[valid], dists[valid],
+                                 c=hs[valid], cmap='YlOrRd',
+                                 s=20, alpha=0.85, zorder=3)
+                cbar = plt.colorbar(sc, ax=ax2, shrink=0.88, pad=0.02)
+                cbar.set_label('고도 (km)', fontsize=8)
+                ax2.scatter([vs[valid][0]], [dists[valid][0]],
+                            color=GRN, s=90, zorder=5, marker='o', label='발사 초기')
+                ax2.scatter([vs[valid][-1]], [dists[valid][-1]],
+                            color=RED, s=90, zorder=5, marker='*', label='궤도 진입 직전')
+                ax2.legend(fontsize=8)
 
-            # IIP 의미 설명 박스
-            iip_now = iips[valid][0] if valid.any() else 0
-            fig.text(0.5, -0.04,
-                     f'현재 설정 — v₀={v0} km/s  γ₀={g0}°  h₀={h0} km  |  '
-                     f'초기 IIP ≈ {iip_now:.1f}° ({iip_now*111:.0f} km)',
-                     ha='center', fontsize=9.5, color='#333',
-                     bbox=dict(boxstyle='round', facecolor='#EEF4FB', alpha=0.9))
+                # 물리 해석 화살표
+                ax2.annotate('', xy=(vs[valid][-1]*0.95, dists[valid][-1]),
+                             xytext=(vs[valid][0]*1.05, dists[valid][0]),
+                             arrowprops=dict(arrowstyle='->', color='#555', lw=1.5))
+                ax2.text(np.mean(vs[valid]), np.mean(dists[valid]),
+                         '속도↑\n→ IIP↑', fontsize=8, color='#555',
+                         ha='center', va='center', style='italic')
 
-            for ax in axes:
-                ax.spines[['top','right']].set_visible(False)
-            plt.suptitle('순시낙하점(IIP) 탐색기 — 속도·경로각·고도 변화에 따른 IIP 궤적',
+            ax2.set_xlabel('속도 (km/s)', fontsize=9)
+            ax2.set_ylabel('IIP 낙하거리 (km)', fontsize=9)
+            ax2.set_title('속도 vs IIP — 위상도\n(색상 = 고도 km)', fontweight='bold', fontsize=9)
+            ax2.set_facecolor('#FAFBFC'); ax2.grid(alpha=0.25)
+            ax2.set_xlim(left=0); ax2.set_ylim(bottom=0)
+            ax2.spines[['top', 'right']].set_visible(False)
+
+            n_v = valid.sum(); tot = len(ts)
+            note = (f'추력 {thrust_g:.1f}g  |  γ₀={gamma0:.0f}°  |  '
+                    f'피치오버 {h0:.0f}km  |  '
+                    f'IIP 유효 구간 {n_v}/{tot}스텝 ({100*n_v//tot}%)')
+            fig.text(0.5, -0.02, note, ha='center', fontsize=9, color='#555',
+                     bbox=dict(boxstyle='round', facecolor='#EEF4FB', alpha=0.85))
+            plt.suptitle('IIP(순시낙하점) 탐색기 — 저속 발사 초기 → 궤도 진입까지 전 구간',
                          fontsize=12, fontweight='bold', color='#1A1A2E')
             plt.tight_layout()
             plt.show()
 
     def on_change(change):
-        draw(v0_sl.value, g0_sl.value, h0_sl.value)
-    for sl in [v0_sl, g0_sl, h0_sl]:
+        draw(thrust_sl.value, gamma_sl.value, h0_sl.value)
+
+    for sl in [thrust_sl, gamma_sl, h0_sl]:
         sl.observe(on_change, names='value')
 
     ui = widgets.VBox([
-        widgets.HTML('<b>🗺️ IIP(순시낙하점) 탐색기</b> — 슬라이더를 움직이면 IIP 궤적이 실시간 업데이트됩니다'),
-        v0_sl, g0_sl, h0_sl, out
-    ])
-    draw(v0_sl.value, g0_sl.value, h0_sl.value)
+        widgets.HTML(
+            '<b>🗺️ IIP(순시낙하점) 탐색기</b><br>'
+            '<span style="font-size:0.88em;color:#555">'
+            '🔶 <b>순 추력(×g)</b>: 클수록 궤도 빠르게 도달, IIP 유효 구간 짧아짐 &nbsp;|&nbsp; '
+            '🔵 <b>초기 경로각</b>: 클수록(수직에 가까울수록) 초기 IIP 작아짐 &nbsp;|&nbsp; '
+            '🟢 <b>피치오버 고도</b>: 중력 턴 시작점'
+            '</span>'),
+        thrust_sl, gamma_sl, h0_sl, out])
+    draw(thrust_sl.value, gamma_sl.value, h0_sl.value)
     display(ui)
 
 
