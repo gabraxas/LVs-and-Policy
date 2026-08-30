@@ -2703,3 +2703,807 @@ def thrust_equation_schematic():
     print("→ Rao 근사 벨(bell) 팽창부 → 출구. 벨 노즐은 동일 팽창비의 원뿔형(15°) 노즐보다")
     print("짧으면서도 유사한 성능을 내도록 목 부근에서 급격히 꺾인 뒤 출구 쪽으로 갈수록")
     print("완만해지는 곡선 윤곽을 가진다 (Falcon 9 Merlin, RS-25 등 실제 엔진의 전형적 형상).")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 8주차 위젯 함수  ──  비행안전 · IIP · FTS · 도그레그 · Ec
+# ══════════════════════════════════════════════════════════════════════════════
+
+def fts_system_diagram():
+    """FTS 전체 시스템 구조를 지상-탑재 2개 레이어로 시각화.
+    지상 CTS → RF 업링크 → 탑재 FTR → SAD → 파괴장치 흐름."""
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
+
+    fig, ax = plt.subplots(figsize=(13, 7))
+    ax.set_xlim(0, 13); ax.set_ylim(0, 7)
+    ax.axis('off')
+    fig.patch.set_facecolor('#F7F9FC')
+    ax.set_facecolor('#F7F9FC')
+
+    # 색상 팔레트
+    C_GND   = '#1A6EA8'   # 지상 파란
+    C_AIR   = '#E07B39'   # 탑재 주황
+    C_EXP   = '#C0392B'   # 폭발 레드
+    C_SAF   = '#27AE60'   # 안전 초록
+    C_LBL   = 'white'
+    ALPHA   = 0.92
+
+    def box(ax, x, y, w, h, color, label, sublabel='', fontsize=10):
+        rect = FancyBboxPatch((x, y), w, h,
+                              boxstyle="round,pad=0.08", linewidth=1.5,
+                              edgecolor='white', facecolor=color, alpha=ALPHA, zorder=3)
+        ax.add_patch(rect)
+        ax.text(x+w/2, y+h/2+(0.18 if sublabel else 0), label,
+                ha='center', va='center', color=C_LBL,
+                fontsize=fontsize, fontweight='bold', zorder=4)
+        if sublabel:
+            ax.text(x+w/2, y+h/2-0.22, sublabel,
+                    ha='center', va='center', color='#F0F0F0',
+                    fontsize=7.5, zorder=4)
+
+    def arrow(ax, x1, y1, x2, y2, label='', color='#555', lw=2):
+        ax.annotate('', xy=(x2, y2), xytext=(x1, y1),
+                    arrowprops=dict(arrowstyle='->', color=color, lw=lw), zorder=2)
+        if label:
+            mx, my = (x1+x2)/2, (y1+y2)/2
+            ax.text(mx, my+0.18, label, ha='center', va='bottom',
+                    fontsize=8, color=color, fontweight='bold', zorder=5)
+
+    # ── 레이어 배경 ──
+    ax.add_patch(FancyBboxPatch((0.2, 4.0), 12.6, 2.6,
+                 boxstyle="round,pad=0.1", linewidth=1, edgecolor='#AACDE8',
+                 facecolor='#E8F4FC', alpha=0.5, zorder=1))
+    ax.text(0.55, 6.45, '🏢  지상(Ground) 시스템', fontsize=10, color=C_GND,
+            fontweight='bold')
+
+    ax.add_patch(FancyBboxPatch((0.2, 0.5), 12.6, 3.2,
+                 boxstyle="round,pad=0.1", linewidth=1, edgecolor='#F4C48A',
+                 facecolor='#FEF5EC', alpha=0.5, zorder=1))
+    ax.text(0.55, 3.55, '🚀  탑재(Airborne) 시스템', fontsize=10, color=C_AIR,
+            fontweight='bold')
+
+    # ── 지상 박스 ──
+    box(ax,0.5,4.4,2.2,1.6, C_GND, 'RSO\n비행안전통제관', 'Human-in-the-loop', fontsize=9)
+    box(ax,3.2,4.4,2.5,1.6, C_GND, 'Command Transmitter\nSystem (CTS)', '420~450 MHz · 이중화', fontsize=8.5)
+    box(ax,6.2,4.4,2.5,1.6, '#5B7FA6', '중계국 체인', 'LoS 확보 / 도서·선박', fontsize=8.5)
+
+    # ── RF 화살표 (지상→공중) ──
+    arrow(ax, 4.7, 4.4, 4.7, 3.4, '', '#2E86C1', lw=2.5)
+    ax.text(5.2, 3.85, '① RF 업링크\nFM + IRIG 톤 (3~4개 조합)',
+            ha='left', va='center', fontsize=8, color='#1A5276', fontweight='bold')
+
+    # ── 지상 내부 화살표 ──
+    arrow(ax, 2.7, 5.2, 3.2, 5.2, 'RSO 명령', C_GND, lw=1.8)
+    arrow(ax, 5.7, 5.2, 6.2, 5.2, '', '#4A7598', lw=1.8)
+
+    # ── 탑재 박스 ──
+    box(ax,0.5,0.8,2.4,2.0, C_AIR, 'FTR\n비행종단수신기', 'FTR-200 / TUALCOM\nRCC-319 준수', fontsize=8.5)
+    box(ax,3.4,0.8,2.4,2.0, '#C0782A', 'SAD / ESAD\n안전·기폭장치', 'SAFE → ARM → FIRE\nLEEFI 고전압 기폭', fontsize=8.5)
+    box(ax,6.5,0.8,2.4,2.0, C_EXP, '파괴장치\nLSC / DCA', '선형정형작약\n집중파괴장약', fontsize=8.5)
+
+    # ── 탑재 내부 화살표 ──
+    arrow(ax, 2.9, 1.8, 3.4, 1.8, '② 톤 디코딩\n명령 출력', '#D35400', lw=1.8)
+    arrow(ax, 5.8, 1.8, 6.5, 1.8, '③ 고전압 펄스\nLEEFI 기폭', '#922B21', lw=1.8)
+
+    # ── AFTS 박스 ──
+    box(ax,9.5,0.8,3.0,2.0, '#6C3483', 'AFTS\n자율비행종단시스템', 'GPS L1/L2 + IMU\n소프트웨어 규칙 판단', fontsize=8.5)
+    ax.annotate('', xy=(9.0,1.8), xytext=(9.5,1.8),
+                arrowprops=dict(arrowstyle='<-', color='#6C3483', lw=1.8), zorder=2)
+    ax.text(9.23, 2.1, '(AFTS 경우)', fontsize=7.5, color='#6C3483', ha='center')
+
+    # ── 결과 화살표 ──
+    arrow(ax, 8.9, 1.8, 10.2, 1.8, '', '#888', lw=1)
+    ax.add_patch(FancyBboxPatch((10.1,0.8),2.3,0.9,
+                 boxstyle="round,pad=0.06", linewidth=1.2,
+                 edgecolor='#C0392B', facecolor='#FDEDEC', zorder=3))
+    ax.text(11.25, 1.25, '💥  추력 제거\n→ 발사체 불안정',
+            ha='center', va='center', fontsize=8, color='#922B21', fontweight='bold', zorder=4)
+
+    # ── Fail-Safe 설명 ──
+    ax.add_patch(FancyBboxPatch((0.3,3.65),5.5,0.55,
+                 boxstyle="round,pad=0.06", linewidth=1,
+                 edgecolor='#27AE60', facecolor='#EAFAF1', zorder=3))
+    ax.text(3.05, 3.92,
+            '🔒  Fail-Safe 원칙: 신호 두절 → 기폭 안 됨 (Safe 유지)',
+            ha='center', va='center', fontsize=8.5, color='#1E8449', fontweight='bold', zorder=4)
+
+    # ── 명령 시퀀스 박스 ──
+    seq_colors = [C_SAF, '#F39C12', C_EXP]
+    seq_lbls   = ['SAFE\n(초기상태)', 'ARM\n(무장)', 'TERMINATE\n(기폭)']
+    for ii,(sc,sl) in enumerate(zip(seq_colors, seq_lbls)):
+        bx = 8.0 + ii*1.45
+        box(ax, bx, 3.65, 1.3, 0.9, sc, sl, fontsize=7.5)
+        if ii < 2:
+            arrow(ax, bx+1.3, 4.1, bx+1.45, 4.1, '', '#333', lw=1.5)
+    ax.text(10.35, 4.72, '명령 시퀀스', ha='center', fontsize=8.5,
+            color='#333', fontweight='bold')
+
+    plt.title('비행종단시스템(FTS) 전체 구조 — 지상-탑재 연계 흐름',
+              fontsize=13, fontweight='bold', pad=10, color='#1A1A2E')
+    plt.tight_layout()
+    plt.show()
+
+
+def irig_tone_explorer():
+    """IRIG 톤 명령 방식을 인터랙티브하게 탐색.
+    슬라이더로 반송파 주파수·톤 조합을 바꾸면 FM 신호와 명령 시퀀스가 업데이트된다."""
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import ipywidgets as widgets
+    from IPython.display import display
+
+    IRIG_TONES = {
+        1:288, 2:320, 3:384, 4:448, 5:512,
+        6:640, 7:672, 8:768, 9:896, 10:960,
+        11:1024,12:1152,13:1280,14:1440,15:1536,
+        16:1920,17:2048,18:2560,19:3072,20:3456
+    }
+
+    out = widgets.Output()
+    fc_slider  = widgets.IntSlider(value=435, min=420, max=450, step=1,
+                                   description='반송파 (MHz)', style={'description_width':'120px'},
+                                   layout=widgets.Layout(width='420px'))
+    arm_dd     = widgets.Dropdown(options=list(IRIG_TONES.keys()), value=10,
+                                  description='ARM 톤#', style={'description_width':'80px'},
+                                  layout=widgets.Layout(width='200px'))
+    term_dd    = widgets.Dropdown(options=list(IRIG_TONES.keys()), value=14,
+                                  description='TERM 톤#', style={'description_width':'80px'},
+                                  layout=widgets.Layout(width='200px'))
+
+    def draw(fc, arm_n, term_n):
+        with out:
+            out.clear_output(wait=True)
+            arm_hz  = IRIG_TONES[arm_n]
+            term_hz = IRIG_TONES[term_n]
+            t = np.linspace(0, 0.06, 6000)
+
+            fig, axes = plt.subplots(3, 1, figsize=(12, 7),
+                                     gridspec_kw={'height_ratios':[1,1.8,1.2]})
+            fig.patch.set_facecolor('#F7F9FC')
+
+            # ── 패널1: SAFE (반송파만) ──
+            ax0 = axes[0]
+            ax0.plot(t*1000, np.sin(2*np.pi*fc*1e6*t + 0), color='#27AE60', lw=1.2, alpha=0.7)
+            ax0.set_title(f'① SAFE 상태 — 반송파만 ({fc} MHz, FM 변조)', fontsize=10,
+                          color='#1E8449', fontweight='bold')
+            ax0.set_ylabel('진폭', fontsize=8); ax0.set_yticks([])
+            ax0.text(55, 0.6, '신호 있음 → 파괴 안 됨 (Fail-Safe)', fontsize=9,
+                     color='#27AE60', fontweight='bold')
+            ax0.set_xlim(0, 60)
+
+            # ── 패널2: ARM + TERM 시퀀스 ──
+            ax1 = axes[1]
+            t_full = np.linspace(0, 0.12, 12000)
+
+            # ARM 구간 (0~0.06s): 반송파 + arm_hz 톤
+            t_arm  = t_full[:6000]
+            sig_arm = (np.sin(2*np.pi*500*t_arm) +
+                       0.5*np.sin(2*np.pi*arm_hz*t_arm))
+            ax1.plot(t_arm*1000, sig_arm, color='#E67E22', lw=1.0,
+                     label=f'ARM 구간: 톤#{arm_n} ({arm_hz} Hz)')
+            ax1.axvspan(0, 60, alpha=0.08, color='#E67E22')
+
+            # TERM 구간 (0.06~0.12s): 반송파 + arm_hz + term_hz 동시
+            t_term = t_full[6000:]
+            sig_term = (np.sin(2*np.pi*500*t_term) +
+                        0.4*np.sin(2*np.pi*arm_hz*t_term) +
+                        0.4*np.sin(2*np.pi*term_hz*t_term))
+            ax1.plot(t_term*1000, sig_term+3, color='#C0392B', lw=1.0,
+                     label=f'TERMINATE 구간: 톤#{arm_n}+#{term_n} ({term_hz} Hz) 동시')
+            ax1.axvspan(60, 120, alpha=0.08, color='#C0392B')
+            ax1.axvline(60, color='#999', lw=1.5, ls='--')
+
+            ax1.set_title('② ARM → TERMINATE 시퀀스 (FM 변조 신호)', fontsize=10,
+                          color='#922B21', fontweight='bold')
+            ax1.legend(fontsize=8, loc='upper right')
+            ax1.set_ylabel('진폭(오프셋)', fontsize=8); ax1.set_yticks([])
+            ax1.set_xlim(0, 120)
+            ax1.text(5, 4.2, 'ARM', fontsize=10, color='#E67E22', fontweight='bold')
+            ax1.text(65, 4.2, 'TERMINATE', fontsize=10, color='#C0392B', fontweight='bold')
+
+            # ── 패널3: LOS (신호 두절) ──
+            ax2 = axes[2]
+            t3 = np.linspace(0, 0.12, 12000)
+            sig3 = np.where(t3 < 0.04,
+                            np.sin(2*np.pi*500*t3),
+                            np.random.normal(0, 0.05, 12000))
+            ax2.plot(t3*1000, sig3, color='#7F8C8D', lw=0.8)
+            ax2.axvspan(40, 120, alpha=0.12, color='#E74C3C')
+            ax2.axvline(40, color='#E74C3C', lw=2, ls='--')
+            ax2.set_title('③ LOS(신호 두절) → Fail-Safe: 기폭 안 됨', fontsize=10,
+                          color='#7F8C8D', fontweight='bold')
+            ax2.text(42, 0.6, '신호 두절 → FTR: SAFE 상태 유지\n파괴 명령 차단',
+                     fontsize=9, color='#C0392B', fontweight='bold')
+            ax2.set_ylabel('진폭', fontsize=8); ax2.set_yticks([])
+            ax2.set_xlim(0, 120)
+            ax2.set_xlabel('시간 (ms)', fontsize=9)
+
+            for ax in axes:
+                ax.set_facecolor('#FAFBFC')
+                ax.spines[['top','right','left']].set_visible(False)
+
+            plt.suptitle(f'IRIG 톤 기반 FTS 통신 방식  |  반송파: {fc} MHz  |  ARM 톤: #{arm_n}({arm_hz}Hz)  TERM 톤: #{term_n}({term_hz}Hz)',
+                         fontsize=11, fontweight='bold', color='#1A1A2E', y=1.01)
+            plt.tight_layout()
+            plt.show()
+
+    widgets.interactive_output(draw,
+                               {'fc':fc_slider,'arm_n':arm_dd,'term_n':term_dd})
+    ui = widgets.VBox([
+        widgets.HTML('<b>📡 IRIG 톤 명령 탐색기</b> — ARM·TERMINATE 톤 번호를 바꾸며 통신 방식을 확인하세요'),
+        widgets.HBox([fc_slider]),
+        widgets.HBox([arm_dd, term_dd]),
+        out
+    ])
+    draw(fc_slider.value, arm_dd.value, term_dd.value)
+
+    def on_change(change):
+        draw(fc_slider.value, arm_dd.value, term_dd.value)
+    fc_slider.observe(on_change, names='value')
+    arm_dd.observe(on_change, names='value')
+    term_dd.observe(on_change, names='value')
+    display(ui)
+
+
+def iip_trajectory_explorer():
+    """순시낙하점(IIP)을 실시간으로 계산하고, 발사체 궤적 위에 IIP 궤적을 겹쳐 표시.
+    초기 속도·경로각·고도를 슬라이더로 변경하면 IIP 궤적이 업데이트된다."""
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import ipywidgets as widgets
+    from IPython.display import display
+
+    MU = 3.986e14   # m^3/s^2
+    Re = 6.371e6    # m
+
+    def kepler_iip(r0_m, v0_ms, gamma0_rad):
+        """구형 지구 비반복형 IIP. 비행각 φ → 낙하 거리(호)·체공시간 반환."""
+        lam = v0_ms**2 / (MU / r0_m)
+        cos_g = np.cos(gamma0_rad)
+        sin_g = np.sin(gamma0_rad)
+        rp = Re          # 구형 지구 가정
+
+        A = 1 - lam * cos_g**2
+        B = (1 - (r0_m / rp) * lam * cos_g**2) * cos_g**2
+        disc = A**2 - B
+        if disc < 0:
+            return None, None
+        cos_phi = (A - np.sqrt(disc)) / (1 - (r0_m / rp) * cos_g**2)
+        cos_phi = np.clip(cos_phi, -1, 1)
+        phi = np.arccos(cos_phi)          # 비행각(호)
+
+        # 체공시간 근사 (Zarchan 기반 반해석적)
+        e = np.sqrt(1 - lam * cos_g**2 * r0_m / Re)
+        if e >= 1:
+            return phi, None
+        a = r0_m / (2 - lam * r0_m / Re)
+        if a <= 0:
+            return phi, None
+        n = np.sqrt(MU / a**3)
+        # 진이각 변화 → 체공시간
+        E0 = 2 * np.arctan(np.tan(gamma0_rad / 2) * np.sqrt((1-e)/(1+e))) if abs(e) < 1 else 0
+        tf_est = phi * np.sqrt(r0_m**3 / MU)
+        return phi, tf_est
+
+    def simulate_flight(v0_kms, gamma0_deg, h0_km, t_end=600):
+        v0  = v0_kms * 1000
+        g0  = np.radians(gamma0_deg)
+        r0  = Re + h0_km * 1000
+        dt  = 2.0
+        ts  = np.arange(0, t_end, dt)
+        rs, gs, iips = [], [], []
+        r, v, g = r0, v0, g0
+        for t in ts:
+            rs.append(r - Re)
+            gs.append(np.degrees(g))
+            phi, _ = kepler_iip(r, v, g)
+            iips.append(np.degrees(phi) if phi is not None else np.nan)
+            # 간단 중력 턴 시뮬레이션
+            a_grav = -MU / r**2
+            a_r  = v**2 / r + a_grav * np.sin(g)   # 간략화
+            dg   = (-MU / r**2 / v + v / r) * np.cos(g) * dt
+            dv   = (0 - MU / r**2 * np.sin(g)) * dt
+            dh   = v * np.sin(g) * dt
+            g   += dg
+            v   = max(v + dv, 100)
+            r   = max(r + dh, Re + 100)
+        return ts, np.array(rs)/1000, np.array(gs), np.array(iips)
+
+    out = widgets.Output()
+    v0_sl  = widgets.FloatSlider(value=6.5, min=1.0, max=9.5, step=0.1,
+                                 description='초기속도 (km/s)', style={'description_width':'130px'},
+                                 layout=widgets.Layout(width='450px'))
+    g0_sl  = widgets.FloatSlider(value=30, min=5, max=85, step=1,
+                                 description='비행경로각 (°)', style={'description_width':'130px'},
+                                 layout=widgets.Layout(width='450px'))
+    h0_sl  = widgets.FloatSlider(value=100, min=20, max=400, step=10,
+                                 description='초기고도 (km)', style={'description_width':'130px'},
+                                 layout=widgets.Layout(width='450px'))
+
+    def draw(v0, g0, h0):
+        with out:
+            out.clear_output(wait=True)
+            ts, hs, gs, iips = simulate_flight(v0, g0, h0, t_end=500)
+            valid = ~np.isnan(iips)
+
+            fig, axes = plt.subplots(1, 3, figsize=(14, 4.5))
+            fig.patch.set_facecolor('#F7F9FC')
+            BLUE = '#1A6EA8'; ORG = '#E07B39'; RED = '#C0392B'
+
+            ax0 = axes[0]
+            ax0.plot(ts[valid], hs[valid], color=BLUE, lw=2, label='고도')
+            ax0.set_xlabel('시간 (s)'); ax0.set_ylabel('고도 (km)')
+            ax0.set_title('발사체 고도 변화', fontweight='bold')
+            ax0.set_facecolor('#FAFBFC'); ax0.grid(alpha=0.3)
+
+            ax1 = axes[1]
+            ax1.plot(ts[valid], iips[valid], color=ORG, lw=2.5, label='IIP (°)')
+            ax1.axhline(0, color='#888', lw=1, ls='--')
+            max_iip = np.nanmax(iips) if valid.any() else 0
+            if valid.any():
+                ax1.axhline(max_iip, color=RED, lw=1.2, ls=':', alpha=0.6)
+                ax1.text(ts[valid][-1]*0.6, max_iip+0.5,
+                         f'최대 IIP: {max_iip:.1f}°\n(≈ {max_iip*111:.0f} km)', fontsize=9, color=RED)
+            ax1.set_xlabel('시간 (s)'); ax1.set_ylabel('IIP 비행각 (°)')
+            ax1.set_title('IIP(순시낙하점) 비행각 변화', fontweight='bold')
+            ax1.set_facecolor('#FAFBFC'); ax1.grid(alpha=0.3)
+
+            ax2 = axes[2]
+            if valid.any():
+                sc = ax2.scatter(iips[valid], hs[valid],
+                                 c=ts[valid], cmap='plasma', s=15, alpha=0.8, zorder=3)
+                plt.colorbar(sc, ax=ax2, label='시간 (s)', shrink=0.85)
+            ax2.set_xlabel('IIP 비행각 (°)'); ax2.set_ylabel('발사체 고도 (km)')
+            ax2.set_title('고도 vs IIP 궤적 상관', fontweight='bold')
+            ax2.set_facecolor('#FAFBFC'); ax2.grid(alpha=0.3)
+
+            # IIP 의미 설명 박스
+            iip_now = iips[valid][0] if valid.any() else 0
+            fig.text(0.5, -0.04,
+                     f'현재 설정 — v₀={v0} km/s  γ₀={g0}°  h₀={h0} km  |  '
+                     f'초기 IIP ≈ {iip_now:.1f}° ({iip_now*111:.0f} km)',
+                     ha='center', fontsize=9.5, color='#333',
+                     bbox=dict(boxstyle='round', facecolor='#EEF4FB', alpha=0.9))
+
+            for ax in axes:
+                ax.spines[['top','right']].set_visible(False)
+            plt.suptitle('순시낙하점(IIP) 탐색기 — 속도·경로각·고도 변화에 따른 IIP 궤적',
+                         fontsize=12, fontweight='bold', color='#1A1A2E')
+            plt.tight_layout()
+            plt.show()
+
+    def on_change(change):
+        draw(v0_sl.value, g0_sl.value, h0_sl.value)
+    for sl in [v0_sl, g0_sl, h0_sl]:
+        sl.observe(on_change, names='value')
+
+    ui = widgets.VBox([
+        widgets.HTML('<b>🗺️ IIP(순시낙하점) 탐색기</b> — 슬라이더를 움직이면 IIP 궤적이 실시간 업데이트됩니다'),
+        v0_sl, g0_sl, h0_sl, out
+    ])
+    draw(v0_sl.value, g0_sl.value, h0_sl.value)
+    display(ui)
+
+
+def iip_algorithm_comparison():
+    """IIP 4세대 알고리즘을 동일 시나리오에서 오차·연산부하로 비교하는 막대+도표."""
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    algos  = ['1세대\n(평면지구\n포물선)', '2세대\n(반복형\n케플러)', '3세대\n(비반복형\n케플러)', '4세대\n(RSM\n하이브리드)']
+    errors = [45, 8, 2.5, 0.4]           # km, 장거리 발사 기준 대략적 오차
+    costs  = [1, 18, 5, 6]               # 상대 연산 부하 (1=가장 낮음)
+    colors = ['#C0392B','#E67E22','#2980B9','#27AE60']
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    fig.patch.set_facecolor('#F7F9FC')
+
+    ax0 = axes[0]
+    bars = ax0.bar(algos, errors, color=colors, width=0.55, zorder=3,
+                   edgecolor='white', linewidth=1.5)
+    ax0.set_ylabel('IIP 예측 오차 (km)', fontsize=10)
+    ax0.set_title('알고리즘별 IIP 오차 비교\n(장거리 발사체 기준, 대기 항력 포함 시)',
+                  fontsize=11, fontweight='bold')
+    for b, err in zip(bars, errors):
+        ax0.text(b.get_x()+b.get_width()/2, b.get_height()+0.5,
+                 f'{err} km', ha='center', va='bottom', fontsize=10, fontweight='bold')
+    ax0.set_facecolor('#FAFBFC')
+    ax0.spines[['top','right']].set_visible(False)
+    ax0.grid(axis='y', alpha=0.3)
+    ax0.set_ylim(0, 55)
+
+    ax1 = axes[1]
+    bars2 = ax1.bar(algos, costs, color=colors, width=0.55, zorder=3,
+                    edgecolor='white', linewidth=1.5)
+    ax1.set_ylabel('상대 연산 부하 (1 = 최저)', fontsize=10)
+    ax1.set_title('알고리즘별 실시간 연산 부하\n(실시간 비행 통제: 수십 ms 이내 결과 필요)',
+                  fontsize=11, fontweight='bold')
+    for b, c in zip(bars2, costs):
+        ax1.text(b.get_x()+b.get_width()/2, b.get_height()+0.2,
+                 f'{c}×', ha='center', va='bottom', fontsize=10, fontweight='bold')
+    ax1.set_facecolor('#FAFBFC')
+    ax1.spines[['top','right']].set_visible(False)
+    ax1.grid(axis='y', alpha=0.3)
+    ax1.set_ylim(0, 23)
+
+    # 추천 영역 강조
+    ax1.axhspan(0, 8, alpha=0.08, color='#27AE60')
+    ax1.text(2.3, 1.5, '✅ 실시간 적용 가능 구간', fontsize=8.5, color='#1E8449', fontweight='bold')
+
+    # 범례
+    handles = [mpatches.Patch(facecolor=c, label=a.replace('\n', ' '))
+               for c, a in zip(colors, algos)]
+    fig.legend(handles=handles, loc='lower center', ncol=4,
+               fontsize=8.5, framealpha=0.9, bbox_to_anchor=(0.5, -0.05))
+
+    plt.suptitle('IIP 예측 알고리즘 4세대 비교 — 오차 vs 연산 부하 트레이드오프',
+                 fontsize=12, fontweight='bold', color='#1A1A2E')
+    plt.tight_layout()
+    plt.show()
+
+# mpatches을 위해 import
+import matplotlib.patches as mpatches
+
+
+def dogleg_maneuver_explorer():
+    """도그레그 기동을 인터랙티브하게 시각화.
+    방위각 변경 시작 시간·꺾임 각도를 조절하면 지표면 IIP 궤적이 업데이트된다."""
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import ipywidgets as widgets
+    from IPython.display import display
+
+    Re = 6.371e6
+    out = widgets.Output()
+
+    dogleg_sl  = widgets.IntSlider(value=30, min=5, max=90, step=5,
+                                   description='도그레그 각도 (°)', style={'description_width':'140px'},
+                                   layout=widgets.Layout(width='450px'))
+    start_sl   = widgets.IntSlider(value=40, min=10, max=120, step=5,
+                                   description='기동 시작 (초)', style={'description_width':'140px'},
+                                   layout=widgets.Layout(width='450px'))
+
+    def draw(dogleg_deg, t_start):
+        with out:
+            out.clear_output(wait=True)
+            fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+            fig.patch.set_facecolor('#F7F9FC')
+
+            # 지표면 위 IIP 경로 시뮬레이션 (단순화 — 위도·경도 개념적)
+            T    = np.linspace(0, 300, 600)
+            v    = 7000 + T * 10        # 속도 가속
+            az_base = 180               # 기본 방위각(남쪽)
+            azimuth  = np.where(T < t_start,
+                                az_base,
+                                az_base + dogleg_deg * np.minimum((T-t_start)/30, 1))
+
+            # 경도·위도 적산 (단순 직선 근사)
+            dlat = v * np.cos(np.radians(azimuth)) * 2.0 / Re
+            dlon = v * np.sin(np.radians(azimuth)) * 2.0 / Re
+
+            lat  = np.cumsum(dlat) * np.degrees(1) * 0.001 + 28.5
+            lon  = np.cumsum(dlon) * np.degrees(1) * 0.001 - 80.5
+
+            # 기준선 (도그레그 없음)
+            dlat0 = v * np.cos(np.radians(az_base)) * 2.0 / Re
+            dlon0 = v * np.sin(np.radians(az_base)) * 2.0 / Re
+            lat0  = np.cumsum(dlat0) * np.degrees(1) * 0.001 + 28.5
+            lon0  = np.cumsum(dlon0) * np.degrees(1) * 0.001 - 80.5
+
+            ax = axes[0]
+            ax.plot(lon0, lat0, color='#C0392B', lw=1.8, ls='--', alpha=0.7,
+                    label='직선 경로 (도그레그 없음)\n→ 인구밀집 지역 위험')
+            ax.plot(lon, lat, color='#2980B9', lw=2.5, label='도그레그 적용 경로\n→ 무인 해상 유도')
+            ax.axvline(-75, color='#E07B39', lw=1.5, ls=':', alpha=0.8)
+            ax.text(-74.7, 25, '⚠️ 인구밀집 경계', fontsize=8, color='#E07B39', fontweight='bold')
+            ax.scatter([-80.5], [28.5], color='#27AE60', s=120, zorder=5, marker='^')
+            ax.text(-80.2, 28.7, '🚀 케이프 커내버럴', fontsize=8.5, color='#27AE60', fontweight='bold')
+
+            ax.set_xlabel('경도 (°W)', fontsize=9)
+            ax.set_ylabel('위도 (°N)', fontsize=9)
+            ax.set_title(f'지표면 IIP 궤적\n도그레그 {dogleg_deg}° / {t_start}초 시작',
+                         fontsize=10, fontweight='bold')
+            ax.legend(fontsize=8, loc='lower left')
+            ax.set_facecolor('#EAF4FB')
+            ax.add_patch(plt.Rectangle((-75, 15), 10, 15, alpha=0.15, color='#E07B39', zorder=2))
+            ax.text(-70, 22, '인구\n밀집', fontsize=8, color='#E07B39', ha='center', alpha=0.8)
+            ax.spines[['top','right']].set_visible(False)
+            ax.grid(alpha=0.25)
+
+            ax2 = axes[1]
+            dv_penalty = abs(dogleg_deg) * 3.2        # ΔV 손실 (m/s, 개략)
+            payload_loss_pct = min(dv_penalty / 9200 * 100 * 3.5, 35)  # 대략적 페이로드 손실
+            ax2.barh(['ΔV 추가 소모\n(m/s)', '페이로드\n손실 (%)'],
+                     [dv_penalty, payload_loss_pct],
+                     color=['#E07B39','#C0392B'], height=0.4, zorder=3)
+            ax2.set_xlabel('크기', fontsize=9)
+            ax2.set_title(f'도그레그 {dogleg_deg}° 적용 시 페널티',
+                          fontsize=10, fontweight='bold')
+            ax2.text(dv_penalty+5, 0, f'{dv_penalty:.0f} m/s', va='center', fontsize=11, fontweight='bold')
+            ax2.text(payload_loss_pct+0.3, 1, f'{payload_loss_pct:.1f}%', va='center', fontsize=11, fontweight='bold', color='#C0392B')
+            ax2.set_facecolor('#FAFBFC')
+            ax2.spines[['top','right']].set_visible(False)
+            ax2.grid(axis='x', alpha=0.3)
+            ax2.set_xlim(0, max(dv_penalty, 50)*1.3)
+
+            ax2.text(ax2.get_xlim()[1]*0.5, -0.55,
+                     '⚠️ 소형 발사체는 도그레그 패널티가\n페이로드 용량에 치명적',
+                     ha='center', fontsize=9, color='#7F8C8D', style='italic')
+
+            plt.suptitle('도그레그(Dogleg) 기동 탐색기 — 낙하점 회피 vs 페이로드 페널티',
+                         fontsize=12, fontweight='bold', color='#1A1A2E')
+            plt.tight_layout()
+            plt.show()
+
+    def on_change(change):
+        draw(dogleg_sl.value, start_sl.value)
+    dogleg_sl.observe(on_change, names='value')
+    start_sl.observe(on_change, names='value')
+
+    ui = widgets.VBox([
+        widgets.HTML('<b>✈️ 도그레그 기동 탐색기</b> — 도그레그 각도·시작 시간을 바꾸면 IIP 궤적과 페널티가 업데이트됩니다'),
+        dogleg_sl, start_sl, out
+    ])
+    draw(dogleg_sl.value, start_sl.value)
+    display(ui)
+
+
+def ec_risk_calculator_w8():
+    """Ec(예상인명피해) 대화형 계산기.
+    발사 실패 확률·파편 낙하 확률·인구 밀도·사상 면적을 조절해 Ec를 산출한다."""
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import ipywidgets as widgets
+    from IPython.display import display
+
+    out = widgets.Output()
+    pf_sl  = widgets.FloatLogSlider(value=0.005, base=10, min=-4, max=-1, step=0.05,
+                                    description='발사 실패 확률 Pf', style={'description_width':'160px'},
+                                    layout=widgets.Layout(width='480px'))
+    pi_sl  = widgets.FloatLogSlider(value=0.01, base=10, min=-5, max=-1, step=0.05,
+                                    description='파편 낙하 확률 Pi', style={'description_width':'160px'},
+                                    layout=widgets.Layout(width='480px'))
+    dp_sl  = widgets.FloatSlider(value=500, min=0, max=5000, step=50,
+                                 description='인구 밀도 (명/km²)', style={'description_width':'160px'},
+                                 layout=widgets.Layout(width='480px'))
+    ac_sl  = widgets.FloatSlider(value=0.002, min=0.0001, max=0.02, step=0.0001,
+                                 description='사상 면적 Ac (km²)', style={'description_width':'160px'},
+                                 layout=widgets.Layout(width='480px'),
+                                 readout_format='.4f')
+
+    def draw(pf, pi, dp, ac):
+        with out:
+            out.clear_output(wait=True)
+            ec = pf * pi * ac * dp
+            limit_us = 1e-4
+            limit_ind = 1e-6
+
+            fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+            fig.patch.set_facecolor('#F7F9FC')
+
+            # ── 좌: Ec 게이지 ──
+            ax0 = axes[0]
+            ax0.set_facecolor('#FAFBFC')
+            ax0.spines[['top','right','left','bottom']].set_visible(False)
+            ax0.set_xticks([]); ax0.set_yticks([])
+
+            # 색 결정
+            if ec <= limit_ind:
+                color_ec = '#27AE60'; status = '✅ 안전 (개인 기준도 통과)'
+            elif ec <= limit_us:
+                color_ec = '#E07B39'; status = '⚠️ 주의 (FAA 집단 기준 통과, 개인 기준 초과)'
+            else:
+                color_ec = '#C0392B'; status = '❌ 위험 (FAA 기준 초과 — 발사 불허)'
+
+            ax0.text(0.5, 0.78, f'Ec = {ec:.2e}', ha='center', va='center',
+                     fontsize=28, fontweight='bold', color=color_ec,
+                     transform=ax0.transAxes)
+            ax0.text(0.5, 0.60, status, ha='center', va='center',
+                     fontsize=13, color=color_ec, transform=ax0.transAxes)
+            ax0.text(0.5, 0.42,
+                     f'Ec = Pf × Pi × Ac × Dp\n'
+                     f'   = {pf:.1e} × {pi:.1e} × {ac:.4f} × {dp:.0f}',
+                     ha='center', va='center', fontsize=10.5,
+                     color='#555', transform=ax0.transAxes,
+                     bbox=dict(boxstyle='round', facecolor='#EEF4FB', alpha=0.8))
+            ax0.text(0.5, 0.22,
+                     f'FAA 집단 기준: Ec ≤ {limit_us:.0e}\n개인 기준: Pc ≤ {limit_ind:.0e}',
+                     ha='center', va='center', fontsize=9.5, color='#666',
+                     transform=ax0.transAxes)
+            ax0.set_title('Ec(예상인명피해) 산출 결과', fontsize=12, fontweight='bold')
+
+            # ── 우: 파라미터 기여도 ──
+            ax1 = axes[1]
+            params = ['실패 확률\nPf', '낙하 확률\nPi', '사상 면적\nAc', '인구 밀도\nDp']
+            vals   = [pf, pi, ac*1000, dp/10000]  # 스케일 정규화
+            clrs   = ['#2980B9','#E07B39','#C0392B','#8E44AD']
+            bars   = ax1.barh(params, vals, color=clrs, height=0.45, zorder=3)
+            ax1.set_title('Ec 구성 인자 상대 크기\n(스케일 정규화)', fontsize=11, fontweight='bold')
+            ax1.set_facecolor('#FAFBFC')
+            ax1.spines[['top','right']].set_visible(False)
+            ax1.grid(axis='x', alpha=0.3)
+            for b, v in zip(bars, [pf, pi, ac, dp]):
+                ax1.text(b.get_width()+0.00005, b.get_y()+b.get_height()/2,
+                         f'{v:.2e}' if v < 0.01 else f'{v:.1f}',
+                         va='center', fontsize=9.5)
+
+            plt.suptitle('Ec(예상인명피해) 대화형 계산기 — 발사 허가 기준 확인',
+                         fontsize=12, fontweight='bold', color='#1A1A2E')
+            plt.tight_layout()
+            plt.show()
+
+    def on_change(change):
+        draw(pf_sl.value, pi_sl.value, dp_sl.value, ac_sl.value)
+    for sl in [pf_sl, pi_sl, dp_sl, ac_sl]:
+        sl.observe(on_change, names='value')
+
+    ui = widgets.VBox([
+        widgets.HTML('<b>📊 Ec(예상인명피해) 계산기</b> — 각 인자를 조절해 발사 허가 기준 통과 여부를 확인하세요'),
+        pf_sl, pi_sl, dp_sl, ac_sl, out
+    ])
+    draw(pf_sl.value, pi_sl.value, dp_sl.value, ac_sl.value)
+    display(ui)
+
+
+def kslv_fts_evolution():
+    """나로호→누리호 FTS 패러다임 전환을 타임라인+비교표로 시각화 (정적)."""
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 6))
+    fig.patch.set_facecolor('#F7F9FC')
+
+    # ── 좌: 타임라인 ──
+    ax0 = axes[0]
+    ax0.set_xlim(0, 10); ax0.set_ylim(-0.5, 7)
+    ax0.axis('off')
+
+    events = [
+        (2009, '나로호 1차 발사\nFTS 정상 작동 (비작동)\n페어링 미분리 실패', '#2980B9', '✓'),
+        (2010, '나로호 2차 발사\n137초 고공 폭발\n⚠️ FTS 오작동 가능성 제기', '#C0392B', '✗'),
+        (2013, '나로호 3차 발사 성공\n명령 기반 FTS 운용', '#27AE60', '✓'),
+        (2022, '누리호 1차 (부분 성공)\n엔진 차단 방식 FTS 도입', '#E67E22', '△'),
+        (2023, '누리호 2·3차 성공\n엔진 차단 FTS 검증 완료', '#27AE60', '✓'),
+        (2025, '누리호 4차 발사\n민간(한화) 주관 첫 발사', '#8E44AD', '✓'),
+        (2026, 'KASA 민간 가이드라인\nEc 기준 공식 채택', '#16A085', '→'),
+    ]
+    years = [e[0] for e in events]
+    y_pos = list(range(len(events)))[::-1]
+
+    ax0.axvline(4, color='#BDC3C7', lw=2, zorder=1)
+    for (yr, lbl, clr, sym), yp in zip(events, y_pos):
+        ax0.scatter([4], [yp], color=clr, s=140, zorder=3)
+        ax0.text(4.2, yp, lbl, va='center', fontsize=8.5, color='#333')
+        ax0.text(3.8, yp, str(yr), va='center', ha='right', fontsize=9,
+                 fontweight='bold', color=clr)
+        ax0.text(4.0, yp+0.28, sym, ha='center', va='bottom', fontsize=9,
+                 color=clr, fontweight='bold')
+
+    ax0.set_title('한국 발사체 FTS 진화 타임라인', fontsize=11, fontweight='bold')
+
+    # ── 우: 비교표 ──
+    ax1 = axes[1]
+    ax1.axis('off')
+    rows = [
+        ['구분', '나로호 (KSLV-I)', '누리호 (KSLV-II)'],
+        ['FTS 방식', '명령 기반\n(Command FTS)', '엔진 차단\n(Thrust Cut-off)'],
+        ['파괴 수단', '뇌관 + 선형 폭약\n(화약형)', '산화제·연료 밸브 차단\n(비폭발형)'],
+        ['통신', '지상 RSO\nSecure-Tone', '자체 판단\n(밸브 제어)'],
+        ['오작동 위험', '⚠️ 뇌관 오발 가능\n2차 폭발 추정', '✅ 화약 없음\n오작동 위험 최소화'],
+        ['국산화', '△ 부분 국산\n(러시아 협력)', '✅ 100% 국산'],
+    ]
+    col_w = [2.5, 3.5, 3.5]
+    row_h = 0.85
+    colors_hdr = ['#2C3E50','#1A6EA8','#27AE60']
+    colors_row_even = '#F8F9FA'; colors_row_odd = '#FFFFFF'
+
+    for ri, row in enumerate(rows):
+        y_top = 5.8 - ri * row_h
+        for ci, (cell, cw) in enumerate(zip(row, col_w)):
+            x_left = sum(col_w[:ci]) * 0.8 + 0.5
+            bg = (colors_hdr[ci] if ri == 0
+                  else (colors_row_even if ri % 2 == 0 else colors_row_odd))
+            fc_txt = 'white' if ri == 0 else '#222'
+            rect = mpatches.FancyBboxPatch(
+                (x_left, y_top - row_h + 0.05), cw*0.8 - 0.05, row_h - 0.1,
+                boxstyle='round,pad=0.04', facecolor=bg, edgecolor='#DEE2E6', linewidth=0.8)
+            ax1.add_patch(rect)
+            ax1.text(x_left + cw*0.4 - 0.025, y_top - row_h/2 + 0.05,
+                     cell, ha='center', va='center', fontsize=8.5, color=fc_txt,
+                     fontweight='bold' if ri == 0 else 'normal')
+
+    ax1.set_xlim(0, 8); ax1.set_ylim(0, 6.5)
+    ax1.set_title('나로호 vs 누리호 FTS 방식 비교', fontsize=11, fontweight='bold')
+
+    plt.suptitle('한국 발사체 FTS 패러다임 전환 — 폭발형 → 엔진 차단형',
+                 fontsize=12, fontweight='bold', color='#1A1A2E')
+    plt.tight_layout()
+    plt.show()
+
+
+def mission_assurance_timeline():
+    """임무보증(Mission Assurance) 6대 프로세스와 Mars Climate Orbiter 교훈을 정적으로 시각화."""
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+    fig.patch.set_facecolor('#F7F9FC')
+
+    # ── 좌: 6대 프로세스 원형 흐름 ──
+    ax0 = axes[0]
+    ax0.set_xlim(-1.6, 1.6); ax0.set_ylim(-1.6, 1.6)
+    ax0.axis('off')
+    ax0.set_facecolor('#F7F9FC')
+
+    processes = [
+        ('요구사항\n분석·검증', 0, 1.2, '#2980B9'),
+        ('설계\n검토', 1.04, 0.6, '#1A6EA8'),
+        ('제작·시험\n검증', 1.04, -0.6, '#16A085'),
+        ('발사준비\n검토(RDR)', 0, -1.2, '#27AE60'),
+        ('이상\n대응', -1.04, -0.6, '#E07B39'),
+        ('교훈\n반영', -1.04, 0.6, '#8E44AD'),
+    ]
+    for label, x, y, c in processes:
+        circ = plt.Circle((x, y), 0.38, color=c, alpha=0.88, zorder=3)
+        ax0.add_patch(circ)
+        ax0.text(x, y, label, ha='center', va='center',
+                 fontsize=8, color='white', fontweight='bold', zorder=4)
+    # 중앙
+    circ_c = plt.Circle((0, 0), 0.42, color='#2C3E50', alpha=0.9, zorder=3)
+    ax0.add_patch(circ_c)
+    ax0.text(0, 0, '임무\n보증', ha='center', va='center',
+             fontsize=10, color='white', fontweight='bold', zorder=4)
+    # 화살표 (원형)
+    import numpy as np
+    for i in range(6):
+        a1 = np.radians(90 - i*60 - 30)
+        a2 = np.radians(90 - (i+1)*60 + 30)
+        ax0.annotate('', xy=(1.0*np.cos(a2), 1.0*np.sin(a2)),
+                     xytext=(1.0*np.cos(a1), 1.0*np.sin(a1)),
+                     arrowprops=dict(arrowstyle='->', color='#888', lw=1.5,
+                                     connectionstyle='arc3,rad=0.3'), zorder=2)
+    ax0.set_title('임무보증 6대 핵심 프로세스\n(Aerospace Corporation 프레임워크)',
+                  fontsize=10.5, fontweight='bold')
+
+    # ── 우: MCO 사례 교훈 ──
+    ax1 = axes[1]
+    ax1.axis('off'); ax1.set_facecolor('#F7F9FC')
+
+    ax1.text(0.5, 0.97, '🛸 임무보증 실패 사례: Mars Climate Orbiter (1999)',
+             ha='center', va='top', fontsize=11, fontweight='bold',
+             color='#C0392B', transform=ax1.transAxes)
+
+    items = [
+        ('💸 손실', '$1.25억 (약 1,650억 원) 우주선 손실', '#C0392B'),
+        ('🔍 원인',
+         'Lockheed Martin: 추력 데이터를 lbf·s(야드파운드)\n'
+         'NASA JPL: N·s(SI 단위)로 오인 → 4.45배 오차 누적', '#E07B39'),
+        ('🚀 결과',
+         '화성 근접 시 예정 고도(226 km) 대신\n'
+         '약 57 km로 진입 → 대기 마찰로 소실', '#8E44AD'),
+        ('🎓 교훈',
+         '① 설계 결함이 아닌 검증 프로세스의 실패\n'
+         '② 단위계 표준화 + 교차검증 자동화 도입\n'
+         '③ TRANSCOST 톤/kg 버그와 동일 유형!', '#27AE60'),
+    ]
+    y_start = 0.88
+    for ttl, body, c in items:
+        ax1.text(0.04, y_start, ttl, fontsize=10, fontweight='bold',
+                 color=c, transform=ax1.transAxes)
+        ax1.text(0.04, y_start-0.07, body, fontsize=8.8,
+                 color='#333', transform=ax1.transAxes)
+        ax1.add_patch(mpatches.FancyBboxPatch(
+            (0.02, y_start-0.14), 0.95, 0.16,
+            transform=ax1.transAxes,
+            boxstyle='round,pad=0.02', facecolor=c, alpha=0.07,
+            edgecolor=c, linewidth=0.8))
+        y_start -= 0.24
+
+    ax1.set_title('임무보증 실패 → 교훈으로', fontsize=10.5, fontweight='bold')
+
+    plt.suptitle('임무보증(Mission Assurance) — 프레임워크 & 실패 사례',
+                 fontsize=12, fontweight='bold', color='#1A1A2E')
+    plt.tight_layout()
+    plt.show()
