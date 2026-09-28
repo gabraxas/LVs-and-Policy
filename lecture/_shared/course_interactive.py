@@ -3587,3 +3587,354 @@ def mission_assurance_timeline():
                  fontsize=12, fontweight='bold', color='#1A1A2E')
     plt.tight_layout()
     plt.show()
+
+
+# ⚙ 계산 모듈 — LV-B의 모든 예제 수치를 한 번에 계산 (실행만 하면 됨)
+import math
+G0 = 9.80665
+
+def design(D=3.7, eps1=0.07, eps2=0.09, OF=2.4, Pc=10e6, pt=0.30e6, K=2.5):
+    """예제 발사체 LV-B(2단 케로신/LOX)의 모든 예제 수치를 한 번에 계산해 dict로 반환"""
+    R = {}
+    payload, dv1, dv2, isp1, isp2 = 5000, 3400, 6100, 290, 343
+    rho_ox, rho_f = 1141, 810
+    R['in'] = dict(payload=payload, dv1=dv1, dv2=dv2, isp1=isp1, isp2=isp2,
+                   eps1=eps1, eps2=eps2, OF=OF, rho_ox=rho_ox, rho_f=rho_f, D=D)
+
+    # ---- 단 사이징 (로켓방정식) ----
+    def size_stage(m_up, dv, isp, eps):
+        MR = math.exp(dv / (isp * G0))
+        m_stage = m_up * (MR - 1) / (1 - MR * eps)
+        return dict(MR=MR, m_stage=m_stage, mp=(1 - eps) * m_stage, ms=eps * m_stage,
+                    m0=m_up + m_stage, mburn=m_up + eps * m_stage)
+    s2 = size_stage(payload, dv2, isp2, eps2)
+    s1 = size_stage(s2['m0'], dv1, isp1, eps1)
+    R['s1'], R['s2'], R['glow'] = s1, s2, s1['m0']
+
+    def glow(e1, e2):
+        b = size_stage(payload, dv2, isp2, e2)
+        return size_stage(b['m0'], dv1, isp1, e1)['m0']
+    R['sens'] = dict(base=R['glow'], e1p=glow(eps1 + .01, eps2), e1m=glow(eps1 - .01, eps2),
+                     e2p=glow(eps1, eps2 + .01), e2m=glow(eps1, eps2 - .01))
+
+    # ---- 추진제 탑재 버짓 ----
+    def inventory(mp):
+        items = [('성능 추진제 (ΔV 요구분)', mp, 1.0), ('비행성능 예비 (FPR)', mp * .008, .008),
+                 ('잔류 추진제 (배출 불능분)', mp * .007, .007), ('시동·정지·냉각 소모', mp * .003, .003),
+                 ('혼합비 편차 여유', mp * .005, .005)]
+        return dict(items=items, total=sum(i[1] for i in items))
+    R['inv1'], R['inv2'] = inventory(s1['mp']), inventory(s2['mp'])
+
+    # ---- 체적 ----
+    ullage, hw = 0.03, 0.01
+    def volumes(m):
+        mo, mf = m * OF / (1 + OF), m / (1 + OF)
+        Vo, Vf = mo / rho_ox, mf / rho_f
+        k = 1 + ullage + hw
+        return dict(mo=mo, mf=mf, Vo=Vo, Vf=Vf, Vto=Vo * k, Vtf=Vf * k)
+    R['vol1'], R['vol2'] = volumes(R['inv1']['total']), volumes(R['inv2']['total'])
+
+    # ---- 탱크 형상: 원통 + 2:1 타원 돔 ----
+    def tank_geom(V, d):
+        r = d / 2
+        Vd = 2 * math.pi * r ** 3 / 3
+        Lcyl = (V - Vd) / (math.pi * r * r)
+        e = math.sqrt(0.75)
+        dome = math.pi * r * r * (1 + ((1 - e * e) / e) * math.atanh(e))
+        area = 2 * math.pi * r * max(Lcyl, 0) + 2 * dome
+        return dict(R=r, Lcyl=Lcyl, L=Lcyl + r, area=area, Vdomes=Vd)
+    R['tank_geom'] = tank_geom
+    dims = dict(Laft=3.0, Lit=1.5, Lis=2.8, Laft2=2.4, itl2=1.0, Lfair=8.0)
+    R['dims'] = dims
+    st = lambda vol, aft, itl: dict(o=tank_geom(vol['Vto'], D), f=tank_geom(vol['Vtf'], D), aft=aft, itl=itl)
+    R['st1'], R['st2'] = st(R['vol1'], dims['Laft'], dims['Lit']), st(R['vol2'], dims['Laft2'], dims['itl2'])
+    for s_ in (R['st1'], R['st2']):
+        s_['total'] = s_['o']['L'] + s_['f']['L'] + s_['itl'] + s_['aft']
+    R['Ltotal'] = R['st1']['total'] + dims['Lis'] + R['st2']['total'] + dims['Lfair']
+    R['LD'] = R['Ltotal'] / D
+    R['common_save'] = D / 2 / 3 + dims['Lit']
+
+    # ---- 지름-길이 트레이드 (1단 탱크 합계) ----
+    R['trade'] = []
+    for d in [2.5, 3.0, 3.5, 4.0, 4.5, 5.0]:
+        o, f = tank_geom(R['vol1']['Vto'], d), tank_geom(R['vol1']['Vtf'], d)
+        R['trade'].append(dict(d=d, L=o['L'] + f['L'], LD=(o['L'] + f['L']) / d, A=o['area'] + f['area']))
+
+    # ---- 엔진 (0.8 MN급 가스발생기, 케로신/LOX) ----
+    e = {}
+    e.update(FSL=0.80e6, ispSL=282, ispVac=311, Pc=Pc)
+    e['mdot'] = e['FSL'] / (e['ispSL'] * G0)
+    e['mo'], e['mf'] = e['mdot'] * OF / (1 + OF), e['mdot'] / (1 + OF)
+    e['pin_t'] = 0.3e6
+    e['pd_o'], e['pd_f'] = 1.25 * Pc, 1.5 * Pc
+    e['dp_o'], e['dp_f'] = e['pd_o'] - e['pin_t'], e['pd_f'] - e['pin_t']
+    e['eta'] = 0.70
+    e['Po'] = e['mo'] * e['dp_o'] / (rho_ox * e['eta'])
+    e['Pf'] = e['mf'] * e['dp_f'] / (rho_f * e['eta'])
+    e['Ptot'] = e['Po'] + e['Pf']
+    e['hp'] = e['Ptot'] / 745.7
+    e.update(cp=2500, Tin=1000, PR=15, gam=1.13, etat=0.60)
+    e['dh'] = e['cp'] * e['Tin'] * e['etat'] * (1 - e['PR'] ** (-(e['gam'] - 1) / e['gam']))
+    e['mt'] = e['Ptot'] / e['dh']
+    e['ft'] = e['mt'] / e['mdot']
+    e['ispT'] = 120
+    e['ispLoss'] = e['ft'] * (1 - e['ispT'] / e['ispSL'])
+    e['Fvac'] = e['ispVac'] * e['mdot'] * G0
+    R['eng'] = e
+    R['cluster'] = dict(n=4, burn=s1['mp'] / (4 * e['mdot']), Fsl=4 * e['FSL'], Fvac=4 * e['Fvac'],
+                        nLift=4 * e['FSL'] / (s1['m0'] * G0), nMeco=4 * e['Fvac'] / (s1['mburn'] * G0))
+
+    # ---- 터보펌프 양정·팁속도 (Δp = 12 MPa 가정) ----
+    R['head'] = []
+    for n, r in [('LOX', rho_ox), ('RP-1', rho_f), ('LH2', 71)]:
+        gH = 12e6 / r
+        u = math.sqrt(gH / 0.5)
+        R['head'].append(dict(n=n, rho=r, H=gH / G0, gH=gH, u=u, stages=math.ceil(gH / (0.5 * 450 ** 2))))
+
+    # ---- NPSH 예산 (LOX, 1단) ----
+    q = {}
+    q['Q'] = e['mo'] / rho_ox
+    q['v'] = 8.0
+    q['D'] = math.sqrt(4 * q['Q'] / (math.pi * q['v']))
+    q.update(K=K, Lline=15, f=0.015)
+    q['Ktot'] = K + q['f'] * q['Lline'] / q['D']
+    q['dpLine'] = q['Ktot'] * rho_ox * q['v'] ** 2 / 2
+    q.update(pt=pt, pv=0.1013e6, margin=0.8)
+    q['cases'] = []
+    for name, nl, h in [('이륙 직후', R['cluster']['nLift'], 12), ('1단 연소종료 직전', R['cluster']['nMeco'], 2)]:
+        head = rho_ox * nl * G0 * h
+        pin = pt + head - q['dpLine']
+        npsha = pin - q['pv']
+        q['cases'].append(dict(n=name, nl=nl, h=h, head=head, pin=pin, npshA=npsha, m=npsha / (rho_ox * G0)))
+    q['worst'] = min(q['cases'], key=lambda c: c['npshA'])
+    q['NPSHr_m'] = q['worst']['m'] * q['margin']
+    q['NPSHr_ft'] = q['NPSHr_m'] * 3.28084
+    q['Qgpm'] = q['Q'] * 15850.32
+    q['Ss'] = []
+    for nm, ss in [('유도자 없음 (일반 산업용 수준)', 8000), ('유도자 적용', 20000), ('고성능 유도자 + 부스터', 30000)]:
+        N = ss * q['NPSHr_ft'] ** 0.75 / math.sqrt(q['Qgpm'])
+        u = math.sqrt(e['dp_o'] / rho_ox / 0.5)
+        q['Ss'].append(dict(n=nm, Ss=ss, N=N, u=u, D2=60 * u / (math.pi * N)))
+    R['npsh'] = q
+
+    # ---- 가압제 (헬륨) ----
+    R['press'] = dict(mHe_lox=pt * R['vol1']['Vto'] / (2077 * 150),
+                      cop_300=1.5 * 1600 * 2077 * 300 / 1e9, cop_90=1.5 * 1600 * 2077 * 90 / 1e9)
+
+    # ---- 압력-탱크 벽 질량 (얇은 벽 원통) ----
+    R['tankMass'] = []
+    for p in [0.2, 0.3, 0.5, 1, 2, 3, 4, 5]:
+        rho, sig, tmin, r, rhoP = 2840, 280e6, 0.0015, 1.85, 1030
+        t = max(p * 1e6 * r / sig, tmin)
+        R['tankMass'].append(dict(p=p, t=t, frac=2 * rho * t / r / rhoP * 100))
+    return R
+
+
+R = design()   # 기본값: D=3.7 m, ε1=0.07, ε2=0.09, O/F=2.4, Pc=10 MPa
+print(f"GLOW = {R['glow']/1000:,.1f} t | 전장 = {R['Ltotal']:.1f} m | L/D = {R['LD']:.1f}")
+
+# ⚙ 도식·차트 도우미 — 이후 그림을 그리는 함수 모음 (실행만 하면 됨)
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse, Rectangle, FancyBboxPatch, Polygon, Arc
+
+# ---------- 색상 (course_interactive와 동일 계열) ----------
+C_INK, C_MUTED, C_BLUE, C_AMBER, C_RED, C_GRID = "#1D1D1F", "#666666", "#0066CC", "#C77700", "#C0392B", "#E0E0E0"
+C_BLUE_L, C_AMBER_L, C_GRAY_L = "#DCE9F7", "#FBEBD0", "#E6E9ED"
+
+def _fig(w, h):
+    fig, ax = plt.subplots(figsize=(w, h))
+    ax.set_aspect("equal"); ax.axis("off")
+    return fig, ax
+
+def _box(ax, x, y, w, h, text, fc="white", ec=C_BLUE, fs=10, bold=False, tc=C_INK, lw=1.3):
+    ax.add_patch(FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0,rounding_size=0.08",
+                                fc=fc, ec=ec, lw=lw))
+    ax.text(x + w / 2, y + h / 2, text, ha="center", va="center", fontsize=fs,
+            fontweight="bold" if bold else "normal", color=tc, linespacing=1.3)
+
+def _arr(ax, x1, y1, x2, y2, color=C_BLUE, ls="-", lw=1.6):
+    ax.annotate("", xy=(x2, y2), xytext=(x1, y1),
+                arrowprops=dict(arrowstyle="-|>", color=color, lw=lw, ls=ls, shrinkA=0, shrinkB=0))
+
+def _capsule(ax, x, y, L, D, fc, ec, label="", tc=C_INK, fs=10, lw=1.2):
+    """길이 L(돔 포함), 지름 D의 2:1 타원 돔 탱크를 축척대로 그림 (x,y = 왼쪽 아래)"""
+    d = D / 4
+    ax.add_patch(Ellipse((x + d, y + D / 2), D / 2, D, fc=fc, ec="none"))
+    ax.add_patch(Ellipse((x + L - d, y + D / 2), D / 2, D, fc=fc, ec="none"))
+    ax.add_patch(Rectangle((x + d, y), L - 2 * d, D, fc=fc, ec="none"))
+    ax.add_patch(Arc((x + d, y + D / 2), D / 2, D, theta1=90, theta2=270, color=ec, lw=lw))
+    ax.add_patch(Arc((x + L - d, y + D / 2), D / 2, D, theta1=-90, theta2=90, color=ec, lw=lw))
+    ax.plot([x + d, x + L - d], [y, y], color=ec, lw=lw)
+    ax.plot([x + d, x + L - d], [y + D, y + D], color=ec, lw=lw)
+    if label:
+        ax.text(x + L / 2, y + D / 2, label, ha="center", va="center", fontsize=fs, fontweight="bold", color=tc)
+
+def draw_vehicle(R, ax=None, figsize=(14, 3.6)):
+    """계산 결과 R을 실제 길이 척도로 그린 발사체 측면도"""
+    D = R['in']['D']; d = R['dims']; s1, s2 = R['st1'], R['st2']
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    ax.set_aspect("equal"); ax.axis("off")
+    x = 0.0
+    bounds = [0.0]
+    def rect(L, fc, label=""):
+        nonlocal x
+        ax.add_patch(Rectangle((x, 0), L, D, fc=fc, ec=C_BLUE, lw=0.9))
+        if label: ax.text(x + L / 2, D / 2, label, ha="center", va="center", fontsize=8.5, color=C_INK, rotation=90 if L < 2.0 else 0)
+        x += L; bounds.append(x)
+    def cap(L, fc, ec, label, tc):
+        nonlocal x
+        _capsule(ax, x, 0, L, D, fc, ec, label, tc, fs=10)
+        x += L; bounds.append(x)
+    rect(d['Laft'], "#9FB4CC", "엔진부")
+    cap(s1['f']['L'], C_AMBER_L, C_AMBER, "RP-1", C_INK)
+    rect(d['Lit'], C_GRAY_L)
+    cap(s1['o']['L'], C_BLUE_L, C_BLUE, "LOX", C_INK)
+    rect(d['Lis'], C_GRAY_L, "단간부")
+    rect(d['Laft2'], "#9FB4CC", "엔진부")
+    cap(s2['f']['L'], C_AMBER_L, C_AMBER, "RP-1", C_INK)
+    rect(d['itl2'], C_GRAY_L)
+    cap(s2['o']['L'], C_BLUE_L, C_BLUE, "LOX", C_INK)
+    fcyl = 5.0
+    rect(fcyl, "#F1F3F6", "페어링")
+    fcone = d['Lfair'] - fcyl
+    ax.add_patch(Polygon([[x, 0], [x, D], [x + fcone, D / 2]], fc="#F1F3F6", ec=C_BLUE, lw=0.9))
+    x += fcone; bounds[-1] = x   # 페어링 = 원통 + 콘을 한 구간으로
+    seg = [d['Laft'], s1['f']['L'], d['Lit'], s1['o']['L'], d['Lis'], d['Laft2'], s2['f']['L'], d['itl2'], s2['o']['L'], d['Lfair']]
+    yl = -0.55
+    ax.plot([0, x], [yl, yl], color=C_MUTED, lw=0.8)
+    for b in bounds: ax.plot([b, b], [yl - 0.12, yl + 0.12], color=C_MUTED, lw=0.8)
+    for i, L in enumerate(seg):
+        ax.text((bounds[i] + bounds[i + 1]) / 2, yl - 0.32 - (0.3 if (L < 1.6 and i % 2) else 0), f"{L:.1f}",
+                ha="center", va="top", fontsize=8.5, color=C_INK)
+    yb = -1.85
+    for a, b, t in [(0, bounds[4], f"1단  {s1['total']:.1f} m"), (bounds[5], bounds[9], f"2단  {s2['total']:.1f} m"),
+                    (bounds[9], bounds[10], f"페어링 {d['Lfair']:.1f} m")]:
+        ax.plot([a + .1, b - .1], [yb, yb], color=C_INK, lw=1.6)
+        ax.text((a + b) / 2, yb - 0.15, t, ha="center", va="top", fontsize=10, fontweight="bold", color=C_INK)
+    ax.text(bounds[4] + d['Lis'] / 2, yb - 0.15, f"단간부 {d['Lis']:.1f} m", ha="center", va="top", fontsize=8.5, color=C_MUTED)
+    ax.text(0, D + 0.25, f"D = {D:.1f} m   ·   전장 {R['Ltotal']:.1f} m   ·   L/D = {R['LD']:.1f}   ·   GLOW ≈ {R['glow']/1000:.0f} t",
+            fontsize=11, fontweight="bold", color=C_INK)
+    ax.set_xlim(-0.5, x + 0.5); ax.set_ylim(-3.2, D + 0.9)
+    return ax
+
+def two_flows():
+    fig, ax = _fig(14, 4.1)
+    top = ["임무 ΔV\n(2주차)", "로켓방정식\n단 사이징", "추진제 탑재\n버짓", "탱크 체적\n(O/F, 밀도)", "탱크 치수\n(D, L)", "기체 외형\n(전장, L/D)"]
+    bot = ["엔진 사이클\n연소실 압력 Pc", "펌프 출구압\n회전수", "흡입성능\nNPSH 요구", "탱크 압력\n공급계 설계", "탱크 벽 질량\n→ 구조질량비 ε", "다시 ①의\n질량 가정"]
+    ax.text(0, 4.05, "① 질량·체적의 흐름  (임무 → 외형)", fontsize=12, fontweight="bold", color=C_INK)
+    ax.text(0, 1.75, "② 압력·흡입 제약의 되먹임  (엔진 → 기체)", fontsize=12, fontweight="bold", color=C_INK)
+    for i in range(6):
+        _box(ax, i * 2.35, 2.9, 1.95, 0.95, top[i], "white", C_BLUE, 10, True)
+        _box(ax, i * 2.35, 0.6, 1.95, 0.95, bot[i], C_AMBER_L, C_AMBER, 10, True)
+        if i < 5:
+            _arr(ax, i * 2.35 + 1.97, 3.37, i * 2.35 + 2.33, 3.37)
+            _arr(ax, i * 2.35 + 1.97, 1.07, i * 2.35 + 2.33, 1.07, C_AMBER)
+    _arr(ax, 11.75 + 0.975, 1.57, 11.75 + 0.975, 2.88, C_AMBER, "--")
+    ax.text(13.35, 2.2, "반복", fontsize=10, fontweight="bold", color=C_AMBER)
+    ax.set_xlim(-0.2, 14.0); ax.set_ylim(0.3, 4.4)
+    plt.show()
+
+def pump_fed_schematic():
+    fig, ax = _fig(11, 4.6)
+    _box(ax, 0, 3.0, 2.2, 1.0, "LOX 탱크\n0.3 MPa", C_BLUE_L, C_BLUE, 11, True)
+    _box(ax, 0, 1.2, 2.2, 1.0, "RP-1 탱크\n0.3 MPa", C_BLUE_L, C_BLUE, 11, True)
+    _box(ax, 3.4, 3.0, 2.0, 1.0, "산화제 펌프", "white", C_INK, 11, True)
+    _box(ax, 3.4, 1.2, 2.0, 1.0, "연료 펌프", "white", C_INK, 11, True)
+    _box(ax, 7.6, 1.2, 1.9, 2.8, "연소기\nPc = 10 MPa", C_BLUE, C_BLUE, 12, True, "white")
+    for y in (3.5, 1.7):
+        _arr(ax, 2.25, y, 3.35, y); _arr(ax, 5.45, y, 7.55, y, C_AMBER)
+    ax.text(6.5, 3.62, "12.5 MPa", ha="center", fontsize=10.5, fontweight="bold", color=C_AMBER)
+    ax.text(6.5, 1.82, "15 MPa", ha="center", fontsize=10.5, fontweight="bold", color=C_AMBER)
+    _box(ax, 3.2, -0.55, 3.6, 0.7, "터빈  ←  구동 가스  (= 엔진 사이클)", C_AMBER_L, C_AMBER, 10.5, True)
+    _arr(ax, 4.4, 0.17, 4.4, 1.15, C_AMBER, "--", 2)
+    ax.text(4.5, 0.55, "축 동력", fontsize=9.5, style="italic", color=C_MUTED)
+    ax.text(0, 4.5, "펌프식 시스템: 저압 탱크 → 터보펌프 → 고압 연소실 (압력 33배)", fontsize=12, fontweight="bold", color=C_INK)
+    ax.set_xlim(-0.2, 9.8); ax.set_ylim(-0.8, 4.9)
+    plt.show()
+
+def pump_schematic():
+    fig, ax = _fig(11, 3.0)
+    _box(ax, 0, 0.5, 1.8, 1.6, "터빈", C_AMBER_L, C_AMBER, 12, True)
+    ax.plot([1.8, 3.2], [1.3, 1.3], color=C_INK, lw=4)
+    ax.text(2.5, 1.5, "축", ha="center", fontsize=9.5, style="italic", color=C_MUTED)
+    _box(ax, 3.2, 0.7, 1.8, 1.2, "유도자\n(inducer)", C_BLUE_L, C_BLUE, 10.5, True)
+    _box(ax, 5.2, 0.55, 1.8, 1.5, "임펠러", C_BLUE_L, C_BLUE, 11, True)
+    _box(ax, 7.2, 0.5, 1.8, 1.6, "볼류트\n(집수관)", C_BLUE_L, C_BLUE, 10.5, True)
+    _arr(ax, 3.4, -0.1, 3.4, 0.68, C_BLUE); ax.text(3.5, -0.3, "저압 입구", fontsize=10, color=C_MUTED)
+    _arr(ax, 8.1, 0.48, 8.1, -0.25, C_AMBER); ax.text(8.25, -0.3, "고압 출구", fontsize=10, color=C_AMBER)
+    ax.text(0, 2.5, "유도자(캐비테이션 방지) → 임펠러(에너지 부여) → 볼류트(속도 → 압력)", fontsize=11, fontweight="bold", color=C_INK)
+    ax.set_xlim(-0.2, 9.3); ax.set_ylim(-0.6, 2.9)
+    plt.show()
+
+def feed_system():
+    fig, ax = _fig(14, 4.8)
+    names = ["LOX", "RP-1"]
+    for i, y in enumerate((2.9, 0.9)):
+        _box(ax, 0, y, 2.5, 1.0, f"{names[i]} 탱크\n(상부공간 압력 p_t)", C_BLUE_L, C_BLUE, 10.5, True)
+        _box(ax, 3.4, y, 3.0, 1.0, "배출구 · 안티보텍스\n안티슬로시 배플", "white", C_BLUE, 10)
+        _box(ax, 7.3, y, 3.6, 1.0, "피드라인 · 밸브 · 벨로우즈\n(POGO 어큐뮬레이터)", "white", C_BLUE, 10)
+        _box(ax, 11.8, y, 2.1, 1.0, "터보펌프 입구\n(유도자)", C_BLUE, C_BLUE, 10.5, True, "white")
+        for a, b in ((2.55, 3.35), (6.45, 7.25), (10.95, 11.75)): _arr(ax, a, y + 0.5, b, y + 0.5)
+    _box(ax, 0, 4.2, 2.5, 0.55, "가압계 (LOX 탱크용)", C_AMBER_L, C_AMBER, 9.5, True); _arr(ax, 1.25, 4.2, 1.25, 3.93, C_AMBER)
+    _box(ax, 0, 0.0, 2.5, 0.55, "가압계 (RP-1 탱크용)", C_AMBER_L, C_AMBER, 9.5, True); _arr(ax, 1.25, 0.55, 1.25, 0.88, C_AMBER)
+    ax.text(9.1, 2.65, "압력 손실 Δp_line 발생 구간", ha="center", fontsize=9.5, style="italic", color=C_MUTED)
+    ax.text(7.0, 0.55, "극저온 배관 열침투 · 기포 생성 구간", ha="center", fontsize=9.5, style="italic", color=C_MUTED)
+    ax.set_xlim(-0.2, 14.1); ax.set_ylim(-0.2, 5.0)
+    plt.show()
+
+def pogo_loop():
+    fig, ax = _fig(9, 4.0)
+    _box(ax, 0, 2.4, 2.8, 0.9, "구조 종진동", C_BLUE_L, C_BLUE, 11, True)
+    _box(ax, 4.6, 2.4, 2.8, 0.9, "펌프 입구압 변동", C_BLUE_L, C_BLUE, 11, True)
+    _box(ax, 4.6, 0.3, 2.8, 0.9, "유량·추력 변동", C_AMBER_L, C_AMBER, 11, True)
+    _box(ax, 0, 0.3, 2.8, 0.9, "추력이 구조를 가진", C_AMBER_L, C_AMBER, 11, True)
+    _arr(ax, 2.85, 2.85, 4.55, 2.85); _arr(ax, 6.0, 2.35, 6.0, 1.25, C_AMBER)
+    _arr(ax, 4.55, 0.75, 2.85, 0.75, C_AMBER); _arr(ax, 1.4, 1.25, 1.4, 2.35, C_AMBER)
+    ax.text(3.7, 1.75, "POGO\n폐루프", ha="center", va="center", fontsize=13, fontweight="bold", color=C_RED)
+    ax.set_xlim(-0.2, 7.6); ax.set_ylim(0.0, 3.6)
+    plt.show()
+
+def tank_arrangements():
+    fig, axs = plt.subplots(1, 3, figsize=(14, 2.6))
+    for a in axs: a.set_aspect("equal"); a.axis("off"); a.set_xlim(0, 10); a.set_ylim(-1.2, 4.2)
+    # ① 직렬
+    a = axs[0]; a.set_title("① 직렬 독립탱크", fontsize=11, fontweight="bold")
+    _capsule(a, 0.3, 1, 4.2, 2.2, C_BLUE_L, C_BLUE, "LOX")
+    a.add_patch(Rectangle((4.4, 1.3), 1.0, 1.6, fc=C_GRAY_L, ec=C_BLUE, lw=1)); a.text(4.9, 0.55, "탱크간부", ha="center", fontsize=9, color=C_MUTED)
+    _capsule(a, 5.3, 1, 4.4, 2.2, C_AMBER_L, C_AMBER, "RP-1")
+    # ② 공통격벽
+    a = axs[1]; a.set_title("② 공통격벽 (common bulkhead)", fontsize=11, fontweight="bold")
+    D = 2.2; d = D / 4
+    a.add_patch(Ellipse((0.3 + d, 1 + D / 2), D / 2, D, fc=C_BLUE_L, ec=C_BLUE, lw=1.2))
+    a.add_patch(Rectangle((0.3 + d, 1), 4.2, D, fc=C_BLUE_L, ec="none"))
+    a.add_patch(Rectangle((4.5 + d - 0.0, 1), 4.2, D, fc=C_AMBER_L, ec="none"))
+    a.add_patch(Ellipse((9.7 - d, 1 + D / 2), D / 2, D, fc=C_AMBER_L, ec=C_AMBER, lw=1.2))
+    a.add_patch(Ellipse((4.5 + d, 1 + D / 2), D / 2, D * 0.86, fc=C_BLUE_L, ec=C_INK, lw=1.4))
+    a.plot([0.3 + d, 4.5 + d], [1, 1], color=C_BLUE, lw=1.2); a.plot([0.3 + d, 4.5 + d], [1 + D, 1 + D], color=C_BLUE, lw=1.2)
+    a.plot([4.5 + d, 9.7 - d], [1, 1], color=C_AMBER, lw=1.2); a.plot([4.5 + d, 9.7 - d], [1 + D, 1 + D], color=C_AMBER, lw=1.2)
+    a.text(2.4, 2.1, "LOX", ha="center", fontsize=10, fontweight="bold"); a.text(7.4, 2.1, "RP-1", ha="center", fontsize=10, fontweight="bold")
+    a.text(5.0, 0.55, "공통 돔", ha="center", fontsize=9, color=C_MUTED)
+    # ③ 내장·원환
+    a = axs[2]; a.set_title("③ 내장·원환형", fontsize=11, fontweight="bold")
+    _capsule(a, 0.5, 0.8, 9.0, 2.6, C_BLUE_L, C_BLUE, "")
+    a.add_patch(Ellipse((5.0, 2.1), 3.6, 1.6, fc=C_AMBER_L, ec=C_AMBER, lw=1.3))
+    a.text(5.0, 2.1, "내장 탱크", ha="center", va="center", fontsize=10, fontweight="bold")
+    a.text(2.0, 2.1, "외부 탱크", ha="center", va="center", fontsize=9.5, color=C_MUTED)
+    plt.tight_layout(); plt.show()
+
+def iteration_loop():
+    fig, ax = _fig(12, 3.9)
+    pos = [(0, 2.4), (3.9, 2.4), (7.8, 2.4), (7.8, 0.4), (3.9, 0.4), (0, 0.4)]
+    txt = ["① ε 가정\n경험값 0.07 (1단)", "② 성능 추진제\n로켓방정식", "③ 버짓·체적\nO/F, 밀도, ullage",
+           "④ 지름·길이\n탱크·외형", "⑤ 구조질량 추정\n표면적, 단간부, 엔진", "⑥ ε' 재계산\nm_s / (m_s + m_p)"]
+    for i, (p, t) in enumerate(zip(pos, txt)):
+        _box(ax, p[0], p[1], 3.2, 1.1, t, "white" if i < 3 else C_AMBER_L, C_BLUE if i < 3 else C_AMBER, 10.5, True)
+    _arr(ax, 3.25, 2.95, 3.85, 2.95); _arr(ax, 7.15, 2.95, 7.75, 2.95)
+    _arr(ax, 9.4, 2.35, 9.4, 1.55); _arr(ax, 7.75, 0.95, 7.15, 0.95, C_AMBER); _arr(ax, 3.85, 0.95, 3.25, 0.95, C_AMBER)
+    _arr(ax, 1.6, 1.55, 1.6, 2.35, C_AMBER, "--")
+    ax.text(0.0, -0.25, "|ε' - ε| 가 허용오차 이내이면 수렴, 아니면 ①로 복귀 (통상 3~5회)", fontsize=10.5, style="italic", color=C_MUTED)
+    ax.set_xlim(-0.2, 11.2); ax.set_ylim(-0.5, 3.7)
+    plt.show()
+    
