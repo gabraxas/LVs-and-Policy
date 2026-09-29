@@ -61,7 +61,6 @@ def plot_F9_MBS_pi_chart():
     - 수치는 공개 자료(SpaceX 스펙시트, FAA 신고자료) 및 공학적 추정치를 종합한 근사치
     """
     
-    import matplotlib.pyplot as plt
     
     # 셀 1: 나눔고딕 설치 (최초 1회만 필요)
     !apt-get -y install fonts-nanum -qq > /dev/null 2>&1
