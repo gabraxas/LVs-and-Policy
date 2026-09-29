@@ -32,6 +32,98 @@ MU_EARTH = 3.986e5   # km^3/s^2
 R_EARTH = 6378.0     # km
 G0 = 9.80665         # m/s^2
 
+def plot_F9_MBS_pi_chart():
+    """
+    Falcon 9 MBS (Mass Breakdown Structure) 파이차트
+    - 1단(First Stage)과 2단(Second Stage)의 건조질량(구조) 서브시스템별 구성비를 시각화
+    - 수치는 공개 자료(SpaceX 스펙시트, FAA 신고자료) 및 공학적 추정치를 종합한 근사치
+    """
+    
+    import matplotlib.pyplot as plt
+    
+    # 셀 1: 나눔고딕 설치 (최초 1회만 필요)
+    !apt-get -y install fonts-nanum -qq > /dev/null 2>&1
+    import matplotlib.font_manager as fm
+    fm.fontManager.addfont("/usr/share/fonts/truetype/nanum/NanumGothic.ttf")
+    
+    # 경고 무시
+    import warnings
+    warnings.filterwarnings("ignore", category=UserWarning)
+    
+    # ------------------------------------------------------------------
+    # 데이터: 서브시스템별 건조질량 (kg)
+    # ------------------------------------------------------------------
+    stage1_labels = [
+        "Tanks & Structure",
+        "Engine\n(Merlin 1D x9)",
+        "Landing Legs",
+        "Pressurization",
+        "TVC actuator",
+        "Avionics",
+        "Etc",
+    ]
+    stage1_masses = [16500, 4230, 2100, 1200, 700, 500, 370]  # 합계 25,600 kg
+    
+    stage2_labels = [
+        "Tanks & Structure",
+        "Engine(MVac x1)",
+        "Avionics",
+        "Reaction Control System",
+        "Etc",
+    ]
+    stage2_masses = [2700, 600, 250, 200, 150]  # 합계 3,900 kg
+    
+    # ------------------------------------------------------------------
+    # 색상 팔레트 (카테고리별 구분)
+    # ------------------------------------------------------------------
+    colors = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6"]
+    
+    # ------------------------------------------------------------------
+    # 한글 폰트 설정 (환경에 나눔고딕 등이 있으면 자동 사용, 없으면 기본 폰트로 대체)
+    # ------------------------------------------------------------------
+    plt.rcParams["axes.unicode_minus"] = False
+    for font_name in ["NanumGothic", "Malgun Gothic", "AppleGothic"]:
+        if font_name in [f.name for f in plt.matplotlib.font_manager.fontManager.ttflist]:
+            plt.rcParams["font.family"] = font_name
+            break
+    
+    # ------------------------------------------------------------------
+    # 파이차트 그리기
+    # ------------------------------------------------------------------
+    fig, axes = plt.subplots(1, 2, figsize=(13, 7))
+    
+    def draw_pie(ax, labels, masses, colors, title, total_label):
+        total = sum(masses)
+        wedges, texts, autotexts = ax.pie(
+            masses,
+            labels=labels,
+            colors=colors[: len(masses)],
+            autopct=lambda p: f"{p:.1f}%\n({p * total / 100:,.0f} kg)",
+            startangle=90,
+            pctdistance=0.75,
+            textprops={"fontsize": 9},
+            wedgeprops={"edgecolor": "white", "linewidth": 1.5},
+        )
+        for autotext in autotexts:
+            autotext.set_color("white")
+            autotext.set_fontsize(8)
+            autotext.set_fontweight("bold")
+        ax.set_title(f"{title}\n(Total {total_label})", fontsize=13, fontweight="bold", pad=15)
+    
+    draw_pie(axes[0], stage1_labels, stage1_masses, colors,
+             "Falcon 9 1st Stage Dry Mass", "25,600 kg")
+    draw_pie(axes[1], stage2_labels, stage2_masses, colors,
+             "Falcon 9 2nd Stage Dry Mass", "3,900 kg")
+    
+    fig.suptitle("Falcon 9 MBS (Mass Breakdown Structure)",
+                 fontsize=14, fontweight="bold", y=1.02)
+    fig.tight_layout()
+    
+    # ------------------------------------------------------------------
+    # 저장 및 출력
+    # ------------------------------------------------------------------
+    fig.savefig("falcon9_mbs_piechart.png", dpi=200, bbox_inches="tight")
+    plt.show()
 
 def setup_korean_font():
     """Colab 환경에서 한글 폰트(나눔고딕)를 설치하고 matplotlib에 등록한다.
