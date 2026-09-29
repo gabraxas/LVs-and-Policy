@@ -32,6 +32,28 @@ MU_EARTH = 3.986e5   # km^3/s^2
 R_EARTH = 6378.0     # km
 G0 = 9.80665         # m/s^2
 
+
+    
+def draw_pie(ax, labels, masses, colors, title, total_label):
+    total = sum(masses)
+    wedges, texts, autotexts = ax.pie(
+        masses,
+        labels=labels,
+        colors=colors[: len(masses)],
+        autopct=lambda p: f"{p:.1f}%\n({p * total / 100:,.0f} kg)",
+        startangle=90,
+        pctdistance=0.75,
+        textprops={"fontsize": 9},
+        wedgeprops={"edgecolor": "white", "linewidth": 1.5},
+    )
+    for autotext in autotexts:
+        autotext.set_color("white")
+        autotext.set_fontsize(8)
+        autotext.set_fontweight("bold")
+    ax.set_title(f"{title}\n(Total {total_label})", fontsize=13, fontweight="bold", pad=15)
+
+
+
 def plot_F9_MBS_pi_chart():
     """
     Falcon 9 MBS (Mass Breakdown Structure) 파이차트
@@ -91,25 +113,7 @@ def plot_F9_MBS_pi_chart():
     # 파이차트 그리기
     # ------------------------------------------------------------------
     fig, axes = plt.subplots(1, 2, figsize=(13, 7))
-    
-    def draw_pie(ax, labels, masses, colors, title, total_label):
-        total = sum(masses)
-        wedges, texts, autotexts = ax.pie(
-            masses,
-            labels=labels,
-            colors=colors[: len(masses)],
-            autopct=lambda p: f"{p:.1f}%\n({p * total / 100:,.0f} kg)",
-            startangle=90,
-            pctdistance=0.75,
-            textprops={"fontsize": 9},
-            wedgeprops={"edgecolor": "white", "linewidth": 1.5},
-        )
-        for autotext in autotexts:
-            autotext.set_color("white")
-            autotext.set_fontsize(8)
-            autotext.set_fontweight("bold")
-        ax.set_title(f"{title}\n(Total {total_label})", fontsize=13, fontweight="bold", pad=15)
-    
+
     draw_pie(axes[0], stage1_labels, stage1_masses, colors,
              "Falcon 9 1st Stage Dry Mass", "25,600 kg")
     draw_pie(axes[1], stage2_labels, stage2_masses, colors,
