@@ -1,6 +1,6 @@
 """
 course_interactive.py
-우주수송정책과 발사체 기술 — 강의용 인터랙티브 계산기 모음 (1~7주차 공용)
+우주수송정책과 발사체 기술 — 강의용 인터랙티브 계산기 모음 (1~14주차 공용, 5주차 GNC 포함)
 
 사용법 (Colab 노트북 첫 셀):
     !pip install -q ipywidgets
@@ -63,7 +63,9 @@ def plot_F9_MBS_pi_chart():
     
     
     # 셀 1: 나눔고딕 설치 (최초 1회만 필요)
-    !apt-get -y install fonts-nanum -qq > /dev/null 2>&1
+    import subprocess
+    subprocess.run(["apt-get", "-y", "install", "fonts-nanum", "-qq"],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     import matplotlib.font_manager as fm
     fm.fontManager.addfont("/usr/share/fonts/truetype/nanum/NanumGothic.ttf")
     
@@ -4032,4 +4034,1670 @@ def iteration_loop():
     ax.text(0.0, -0.25, "|ε' - ε| 가 허용오차 이내이면 수렴, 아니면 ①로 복귀 (통상 3~5회)", fontsize=10.5, style="italic", color=C_MUTED)
     ax.set_xlim(-0.2, 11.2); ax.set_ylim(-0.5, 3.7)
     plt.show()
-    
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 5주차 위젯 함수  ──  유도·항법·제어(GNC) · 관성센서 · 오차 성장 · 최적 조향
+#   (원본: gnc_interactive.py 를 이 모듈로 통합. 그래프 문구는 영어 — 한글 폰트 불필요)
+#   이름 충돌 방지: 상수 GNC_*, 내부 도우미 _gnc_* 접두어 사용
+#   정적 실습  : ex0_1_dv_waterfall() … ex4_2_nuri_flight2(), ins_anatomy(), accel_schematic(),
+#               gyro_tech_map(), euler_singularity()
+#   슬라이더   : widget_accel_servo, widget_dtg, widget_rlg_lockin, widget_fog, widget_hrg,
+#               widget_mems, widget_coning, widget_schuler, widget_redundancy, widget_nav_budget,
+#               widget_qalpha, widget_steering, widget_assignments
+#   환경변수 GNC_STATIC=1 이면 슬라이더 대신 기본값 그림만 출력 (사전 렌더링용)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+# =============================================================================
+#  PART A - Setup and the original exercises
+#  NOTE: All code output (tables, figures) is in ENGLISH on purpose, so that the
+#        notebook renders identically on any machine (Colab / Windows / macOS)
+#        without a Korean font installed. The lecture text is in Korean markdown.
+# =============================================================================
+import numpy as np
+import pandas as pd
+import matplotlib
+import matplotlib.pyplot as plt
+
+
+# ---- house colors ----
+GNC_NAVY, GNC_STEEL, GNC_AMBER, GNC_MUTED = "#102A43", "#486581", "#E0A526", "#627D98"
+GNC_PALETTE = [GNC_NAVY, GNC_STEEL, GNC_AMBER, "#C0392B", "#7BA0C0"]
+
+# ---- physical constants ----
+GNC_G0      = 9.80665            # standard gravity            [m/s^2]
+GNC_MU      = 3.986004418e14     # Earth gravitational param.  [m^3/s^2]
+GNC_RE      = 6378.137e3         # Earth equatorial radius     [m]
+GNC_OME     = 7.2921159e-5       # Earth rotation rate         [rad/s]
+GNC_C = 2.99792458e8       # speed of light              [m/s]
+
+def gnc_show(df, caption=None):
+    # print a DataFrame without the index
+    if caption:
+        print(caption)
+    with pd.option_context("display.max_columns", None, "display.width", 200):
+        print(df.to_string(index=False))
+
+
+
+
+
+def ex0_1_dv_waterfall():
+    """[Exercise 0-1] Delta-V budget - the gap between the ideal rocket equation and reality"""
+    # [Exercise 0-1] Delta-V budget - the gap between the ideal rocket equation and reality
+    budget = pd.DataFrame({
+        "Item":        ["Orbital velocity", "Gravity loss", "Drag loss", "Steering loss", "Earth rotation gain"],
+        "dV [m/s]":    [7800, 1200, 150, 100, -400],
+        "Set by":      ["Orbital mechanics", "Trajectory / guidance design", "Shape & trajectory",
+                        "Guidance law", "Launch site latitude & azimuth"],
+    })
+    budget.loc[len(budget)] = ["TOTAL (required dV)", budget["dV [m/s]"].sum(), "-"]
+    gnc_show(budget, "== Typical dV budget for a LEO insertion mission (illustrative) ==")
+
+    dv_req   = budget["dV [m/s]"].iloc[-1]
+    Isp      = 300.0
+    mr       = np.exp(dv_req / (Isp * GNC_G0))
+    mr_orbit = np.exp(7800 / (Isp * GNC_G0))
+    print(f"\nRequired dV = {dv_req:,.0f} m/s  ->  mass ratio m0/mf = {mr:.2f}  (Isp = {Isp:.0f} s)")
+    print(f"With zero losses                  m0/mf = {mr_orbit:.2f}")
+    print(f"-> The {dv_req-7800:,.0f} m/s of losses inflate the mass ratio by {mr/mr_orbit:.2f}x.")
+    print(f"-> Cutting steering loss by 100 m/s alone saves about "
+          f"{100e3*(1-np.exp(-100/(Isp*GNC_G0))):,.0f} kg of propellant on a 100 t vehicle.")
+
+    # waterfall: how each term stacks up to the required dV
+    vals = budget["dV [m/s]"][:-1].values.astype(float)
+    labs = ["Orbital\nvelocity", "Gravity\nloss", "Drag\nloss", "Steering\nloss", "Earth\nrotation"]
+    cum  = np.concatenate([[0], np.cumsum(vals)])
+    cols = [GNC_NAVY, GNC_STEEL, GNC_AMBER, "#C0392B", "#7BA0C0"]
+
+    fig, ax = plt.subplots(figsize=(9.2, 3.8))
+    for i, (v, c) in enumerate(zip(vals, cols)):
+        bottom = cum[i] if v >= 0 else cum[i] + v
+        ax.bar(i, abs(v), bottom=bottom, color=c, width=0.62)
+        ax.text(i, max(cum[i], cum[i+1]) + 180, f"{v:+,.0f}", ha="center", fontsize=9.5,
+                fontweight="bold", color=GNC_NAVY)
+        if i < len(vals)-1:
+            ax.plot([i+0.31, i+1-0.31], [cum[i+1]]*2, color=GNC_MUTED, lw=0.9, ls=":")
+    ax.bar(len(vals), cum[-1], color="#334E68", width=0.62)
+    ax.text(len(vals), cum[-1]+180, f"{cum[-1]:,.0f}", ha="center", fontsize=9.5,
+            fontweight="bold", color=GNC_NAVY)
+    ax.axhline(7800, color="#C0392B", ls="--", lw=1.2)
+    ax.text(0.05, 7560, "Orbital velocity 7,800 m/s", fontsize=8.5, color="#C0392B", va="top")
+    ax.set_xticks(range(len(vals)+1)); ax.set_xticklabels(labs + ["Required\ndV"], fontsize=9)
+    ax.set_ylabel("dV [m/s]"); ax.set_ylim(0, cum[-1]*1.12)
+    ax.set_title("Waterfall of the required dV - which terms does guidance govern?",
+                 color=GNC_NAVY, fontweight="bold")
+    ax.grid(axis="y", color="#E2E8F0"); ax.set_axisbelow(True)
+    for sp in ["top", "right"]: ax.spines[sp].set_visible(False)
+    plt.show()
+
+
+
+
+def ex1_1_gnc_block():
+    """[Exercise 1-1] Draw the standard GNC block diagram."""
+    # [Exercise 1-1] Draw the standard GNC block diagram.
+    #   Commands flow left -> right; the state feeds back along the bottom -> left.
+
+    fig, ax = plt.subplots(figsize=(11, 4.6))
+    ax.set_xlim(0, 12); ax.set_ylim(0, 5.2); ax.axis("off")
+
+    def block(x, y, w, h, title, sub, fc):
+        ax.add_patch(plt.Rectangle((x, y), w, h, facecolor=fc, edgecolor="none", zorder=2))
+        ax.text(x+w/2, y+h*0.62, title, ha="center", va="center", color="white",
+                fontsize=12, fontweight="bold", zorder=3)
+        ax.text(x+w/2, y+h*0.26, sub, ha="center", va="center", color="#D9E2EC", fontsize=8.5, zorder=3)
+
+    def arrow(x0, y0, x1, y1, color=GNC_AMBER, label=None, labxy=None):
+        ax.annotate("", xy=(x1, y1), xytext=(x0, y0),
+                    arrowprops=dict(arrowstyle="-|>", color=color, lw=1.8, shrinkA=0, shrinkB=0), zorder=1)
+        if label and labxy:
+            ax.text(labxy[0], labxy[1], label, ha="center", va="center", fontsize=8.5, color=GNC_MUTED)
+
+    W, H = 2.3, 0.95
+    xs = [0.6, 3.5, 6.4, 9.3]; yT, yB = 3.3, 1.0
+    block(xs[0], yT, W, H, "GUIDANCE", "where to go",        GNC_NAVY)
+    block(xs[1], yT, W, H, "CONTROL",  "hold that heading",  GNC_NAVY)
+    block(xs[2], yT, W, H, "ACTUATORS", "TVC / RCS",         GNC_STEEL)
+    block(xs[3], yT, W, H, "VEHICLE",  "plant",              GNC_STEEL)
+    block(xs[1], yB, W, H, "NAVIGATION", "where am I",       GNC_NAVY)
+    block(xs[2], yB, W, H, "IMU", "gyros + accelerometers",  GNC_STEEL)
+
+    for i, lab in enumerate(["attitude cmd", "actuator cmd", "force & moment"]):
+        arrow(xs[i]+W, yT+H/2, xs[i+1], yT+H/2, label=lab,
+              labxy=((xs[i]+W + xs[i+1])/2, yT+H+0.17))
+    arrow(xs[3]+W/2, yT, xs[3]+W/2, yB+H/2, color=GNC_STEEL)
+    arrow(xs[3]+W/2, yB+H/2, xs[2]+W, yB+H/2, color=GNC_STEEL, label="rate & specific force",
+          labxy=((xs[2]+W + xs[3]+W/2)/2, yB+H+0.17))
+    arrow(xs[2], yB+H/2, xs[1]+W, yB+H/2)
+    arrow(xs[1]+W*0.72, yB+H, xs[1]+W*0.72, yT, label="attitude",
+          labxy=(xs[1]+W*0.72+0.52, (yB+H+yT)/2))
+    arrow(xs[1], yB+H/2, xs[0]+W/2, yB+H/2)
+    arrow(xs[0]+W/2, yB+H, xs[0]+W/2, yT, label="position / velocity / attitude",
+          labxy=(xs[0]+W/2-0.05, (yB+H+yT)/2-0.28))
+    ax.text(xs[0]+W/2, yT+H+0.45, "target orbit parameters ( r, V, gamma, i, RAAN )",
+            ha="center", va="center", fontsize=9.5, color=GNC_NAVY,
+            bbox=dict(boxstyle="round,pad=0.35", facecolor="#E2E8F0", edgecolor="none"))
+    arrow(xs[0]+W/2, yT+H+0.27, xs[0]+W/2, yT, color=GNC_STEEL)
+    ax.set_title("Standard GNC architecture", fontsize=14, fontweight="bold", color=GNC_NAVY,
+                 loc="left", pad=14)
+    plt.show()
+
+    print("The dark-navy blocks (guidance, control, navigation) are NOT hardware:")
+    print("they are functions inside the on-board computer's flight software.")
+    print("Only the IMU, the actuators and the vehicle itself are physical.")
+    print()
+    print("Order matters: if navigation is wrong, guidance computes a correct answer to")
+    print("the wrong question. Navigation performance therefore sets the UPPER BOUND on")
+    print("insertion accuracy; guidance sophistication only operates inside that bound.")
+
+
+
+
+def ex2_1_accel_vs_gravity():
+    """[Exercise 2-1] What an accelerometer does NOT measure"""
+    # [Exercise 2-1] What an accelerometer does NOT measure
+    def g_wgs84(h, lat_deg=0.0, J2=1.08263e-3):
+        # gravity magnitude at altitude h [m] including the J2 term  [m/s^2]
+        r   = GNC_RE + h
+        phi = np.radians(lat_deg)
+        return GNC_MU/r**2 * (1 - 1.5*J2*(GNC_RE/r)**2 * (3*np.sin(phi)**2 - 1))
+
+    rows = []
+    for h_km, state in [(0, "On the pad (static)"), (0, "Free fall"),
+                        (100, "Powered ascent (1.5 g)"), (700, "Circular orbit")]:
+        h, g_true = h_km*1e3, g_wgs84(h_km*1e3)
+        if   state.startswith("On the pad"): f_m = g_true   # ground pushes back -> f = +g
+        elif state == "Free fall":           f_m = 0.0      # no contact force   -> f = 0
+        elif state.startswith("Powered"):    f_m = 1.5*GNC_G0   # thrust
+        else:                                f_m = 0.0      # orbit = free fall
+        rows.append([state, h_km, g_true, f_m, f_m - g_true])
+
+    df = pd.DataFrame(rows, columns=["State", "Altitude [km]", "Gravity g [m/s2]",
+                                     "Accelerometer output f = F/m [m/s2]", "f - g"])
+    gnc_show(df.round(4), "== An accelerometer measures specific force, not gravity ==")
+
+    print("\n-> In orbit the accelerometer reads zero. Integrate that without a gravity")
+    print("   model and the satellite flies in a straight line.")
+    print(f"-> From 0 to 700 km gravity drops {g_wgs84(0):.3f} -> {g_wgs84(700e3):.3f} m/s2 "
+          f"({(1-g_wgs84(700e3)/g_wgs84(0))*100:.1f}%). The model carries that change.")
+
+
+
+
+def ex2_2_sagnac():
+    """[Exercise 2-2] How big is the Sagnac signal? Why gyros resist miniaturisation."""
+    # [Exercise 2-2] How big is the Sagnac signal? Why gyros resist miniaturisation.
+    Omega_earth = GNC_OME            # 7.292e-5 rad/s = 15.04 deg/h
+    lam = 633e-9                 # He-Ne wavelength [m]
+
+    rows = []
+    for name, kind, R, L in [("Small RLG (5 cm side)",   "RLG", 0.05/2, 4*0.05),
+                             ("Medium RLG (10 cm side)", "RLG", 0.10/2, 4*0.10),
+                             ("FOG (8 cm coil, 500 m fibre)", "FOG", 0.08/2, 500.0)]:
+        A  = np.pi*R**2 if kind == "FOG" else (2*R)**2
+        dL = 4*A*Omega_earth/GNC_C                                   # path difference [m]
+        if kind == "RLG":
+            readout, unit = 4*A*Omega_earth/(L*lam), "beat freq [Hz]"
+        else:
+            readout, unit = 2*np.pi*L*(2*R)*Omega_earth/(lam*GNC_C)*1e6, "phase [urad]"
+        rows.append([name, kind, A*1e4, dL*1e15, unit, readout])
+
+    df = pd.DataFrame(rows, columns=["Configuration", "Type", "Sensing area A [cm2]",
+                                     "Path difference dL [fm] (1e-15 m)", "Quantity read", "Magnitude"])
+    gnc_show(df.round(3), "== Signal level when sensing Earth rotation (15 deg/h) ==")
+
+    print("\n-> The path difference itself is 2-10 fm, the diameter of an atomic nucleus.")
+    print("   It can never be read as a 'length'.")
+    print("-> An RLG converts it to a beat FREQUENCY, a FOG to an optical PHASE.")
+    print("-> The signal scales with the sensing area A: miniaturisation costs sensitivity,")
+    print("   which is the physical reason MEMS gyros plateau far below navigation grade.")
+
+    A_cm2  = np.logspace(0, 3, 200)
+    dnu_15 = 4*(A_cm2*1e-4)*Omega_earth/(0.4*lam)
+    fig, ax = plt.subplots(figsize=(7.4, 3.4))
+    ax.loglog(A_cm2, dnu_15, color=GNC_NAVY, lw=2.2)
+    for A0, lab in [(25, "small RLG"), (100, "medium RLG"), (400, "large RLG")]:
+        y0 = 4*(A0*1e-4)*Omega_earth/(0.4*lam)
+        ax.plot(A0, y0, "o", color=GNC_AMBER, ms=7, zorder=3)
+        ax.annotate(lab, (A0, y0), textcoords="offset points", xytext=(6, -12),
+                    fontsize=9, color=GNC_MUTED)
+    ax.set_xlabel("Sensing area A [cm2]"); ax.set_ylabel("Beat frequency at Earth rate [Hz]")
+    ax.set_title("Area vs sensitivity - the size/performance trade (RLG, 0.4 m perimeter)")
+    ax.grid(True, which="both", color="#E2E8F0")
+    plt.show()
+
+
+
+
+def ex2_3_gyro_parts():
+    """[Exercise 2-3] Number of parts per gyro, by generation"""
+    # [Exercise 2-3] Number of parts per gyro, by generation
+    gyro = pd.DataFrame({
+        "Generation": ["Floated\n(1955)", "Tuned DTG\n(1965)", "Ring laser RLG\n(1975)",
+                       "Fibre FOG\n(1985)", "Vibrating\n(1990)", "MEMS\n(2000)"],
+        "Parts": [125, 70, 44, 30, 5, 3],
+    })
+    fig, ax = plt.subplots(figsize=(8.6, 3.6))
+    bars = ax.bar(gyro["Generation"], gyro["Parts"], color=GNC_STEEL, width=0.58)
+    for b, v in zip(bars, gyro["Parts"]):
+        ax.text(b.get_x()+b.get_width()/2, v+3, str(v), ha="center", fontsize=10,
+                fontweight="bold", color=GNC_NAVY)
+    ax.set_ylim(0, 145); ax.set_ylabel("Parts per gyro")
+    ax.set_title("Parts count per gyro by generation - 40x fewer in 45 years",
+                 color=GNC_NAVY, fontweight="bold")
+    ax.grid(axis="y", color="#E2E8F0"); ax.set_axisbelow(True)
+    for s in ["top", "right"]: ax.spines[s].set_visible(False)
+    plt.show()
+
+    print(f"Floated -> MEMS: {gyro['Parts'].iloc[0]} -> {gyro['Parts'].iloc[-1]} parts "
+          f"({gyro['Parts'].iloc[0]/gyro['Parts'].iloc[-1]:.0f}x fewer)")
+
+
+
+
+def ex2_4_strapdown():
+    """[Exercise 2-4] Implement strapdown mechanization (quaternion + ECI velocity/position)"""
+    # [Exercise 2-4] Implement strapdown mechanization (quaternion + ECI velocity/position)
+    #   Build a simulated ascent, then recover the trajectory from gyro/accelerometer output only.
+
+    def quat_mult(q, p):
+        w1, x1, y1, z1 = q; w2, x2, y2, z2 = p
+        return np.array([w1*w2-x1*x2-y1*y2-z1*z2,
+                         w1*x2+x1*w2+y1*z2-z1*y2,
+                         w1*y2-x1*z2+y1*w2+z1*x2,
+                         w1*z2+x1*y2-y1*x2+z1*w2])
+
+    def quat_to_dcm(q):
+        w, x, y, z = q/np.linalg.norm(q)
+        return np.array([[1-2*(y*y+z*z), 2*(x*y-w*z),   2*(x*z+w*y)],
+                         [2*(x*y+w*z),   1-2*(x*x+z*z), 2*(y*z-w*x)],
+                         [2*(x*z-w*y),   2*(y*z+w*x),   1-2*(x*x+y*y)]])
+
+    def strapdown(omega_b, f_b, dt, q0, v0, r0, gravity=True):
+        # Strapdown INS mechanization in ECI, first-order integration.
+        # omega_b[N,3]: gyro rates [rad/s];  f_b[N,3]: accelerometer specific force [m/s2]
+        N = len(omega_b)
+        q = q0.copy(); v = v0.copy(); r = r0.copy()
+        R, V, Q = np.zeros((N, 3)), np.zeros((N, 3)), np.zeros((N, 4))
+        for k in range(N):
+            w = omega_b[k]; wn = np.linalg.norm(w)                  # (1) attitude update
+            if wn > 1e-12:
+                dq = np.concatenate([[np.cos(wn*dt/2)], np.sin(wn*dt/2)*w/wn])
+            else:
+                dq = np.array([1.0, 0, 0, 0])
+            q = quat_mult(q, dq); q /= np.linalg.norm(q)
+            Cbi = quat_to_dcm(q)                                    # (2) velocity update
+            a_i = Cbi @ f_b[k]
+            if gravity:
+                rn = np.linalg.norm(r)
+                a_i = a_i - GNC_MU * r / rn**3
+            v = v + a_i*dt
+            r = r + v*dt                                            # (3) position update
+            R[k], V[k], Q[k] = r, v, q
+        return R, V, Q
+
+    # --- simulated flight: vertical rise, then a constant pitch-over rate ---
+    dt, T_end = 0.01, 200.0
+    t = np.arange(0, T_end, dt); N = len(t)
+    pitch_rate = np.where(t < 10, 0.0, np.radians(0.25))            # 0.25 deg/s after 10 s
+    f_mag = np.where(t < 10, 1.4*GNC_G0, 1.4*GNC_G0 + 0.012*GNC_G0*(t-10))      # acceleration grows as mass burns off
+
+    omega_b = np.zeros((N, 3)); omega_b[:, 1] = pitch_rate           # body-y (pitch) rate
+    f_b = np.zeros((N, 3));     f_b[:, 0] = f_mag                    # thrust along body-x
+
+    q0 = np.array([1.0, 0.0, 0.0, 0.0])                              # body axis along local vertical (ECI +X)
+    r0 = np.array([GNC_RE, 0.0, 0.0]); v0 = np.zeros(3)
+    R, V, Q = strapdown(omega_b, f_b, dt, q0, v0, r0)
+
+    alt  = np.linalg.norm(R, axis=1) - GNC_RE
+    spd  = np.linalg.norm(V, axis=1)
+    tilt = np.degrees(np.cumsum(pitch_rate)*dt)
+    print(f"After {T_end:.0f} s:  altitude = {alt[-1]/1e3:7.1f} km,  inertial speed = {spd[-1]:7.1f} m/s,"
+          f"  body-axis tilt = {tilt[-1]:.1f} deg")
+    print(f"Quaternion norm error = {abs(np.linalg.norm(Q[-1])-1):.2e}  (stays ~1e-12 or below when normalised)")
+    print("-> Altitude and speed are recovered from gyro + accelerometer output ONLY.")
+    print("   Accuracy depends entirely on (i) initial attitude q0, (ii) sensor errors, (iii) the gravity model.")
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 3.4))
+    axes[0].plot(t, alt/1e3, color=GNC_NAVY, lw=2)
+    axes[0].set_xlabel("Time [s]"); axes[0].set_ylabel("Altitude [km]")
+    axes[0].set_title("Altitude recovered by strapdown mechanization")
+    axes[1].plot(t, spd, color=GNC_AMBER, lw=2)
+    axes[1].set_xlabel("Time [s]"); axes[1].set_ylabel("Inertial speed [m/s]")
+    axes[1].set_title("Inertial speed")
+    for a in axes: a.grid(color="#E2E8F0"); a.set_axisbelow(True)
+    plt.tight_layout(); plt.show()
+
+
+
+
+def ex2_5_allan():
+    """[Exercise 2-5] Compute the Allan deviation ourselves"""
+    # [Exercise 2-5] Compute the Allan deviation ourselves
+    #   Synthesise a gyro signal = white noise (ARW) + bias instability + rate ramp,
+    #   then see where each component shows up on the Allan plot.
+
+    rng = np.random.default_rng(7)
+    fs, dur = 100.0, 3600.0*3            # 100 Hz, 3 hours
+    n = int(fs*dur); dt_s = 1/fs
+
+    ARW   = 0.003                        # [deg/sqrt(h)]  angle random walk
+    B_ins = 0.01                         # [deg/h]        target bias instability
+    ramp  = 0.002                        # [deg/h/h]      rate ramp
+
+    wn = rng.normal(0, ARW*60/np.sqrt(dt_s), n)         # white noise in deg/h
+    bi = np.cumsum(rng.normal(0, 1, n))                 # random-walk proxy for flicker noise
+    bi = B_ins * bi/np.std(bi) * 0.8
+    rp = ramp * (np.arange(n)*dt_s/3600.0)
+    omega = wn + bi + rp                                # [deg/h]
+
+    def allan_dev(x, dt_s):
+        N = len(x)
+        ms = np.unique(np.logspace(0, np.log10(N//9), 40).astype(int))
+        taus, ad = [], []
+        for m in ms:
+            k = N//m
+            if k < 3: continue
+            y = x[:k*m].reshape(k, m).mean(axis=1)       # cluster averages
+            d = np.diff(y)
+            taus.append(m*dt_s); ad.append(np.sqrt(0.5*np.mean(d**2)))
+        return np.array(taus), np.array(ad)
+
+    tau, ad = allan_dev(omega, dt_s)
+    i0 = np.argmin(ad)
+    fig, ax = plt.subplots(figsize=(7.6, 4.0))
+    ax.loglog(tau, ad, "o-", color=GNC_NAVY, ms=3.5, lw=1.6, label="Synthetic gyro signal")
+    tt = np.logspace(np.log10(tau[0]), np.log10(tau[0]*60), 20)
+    ax.loglog(tt, ad[0]*(tt/tau[0])**-0.5, "--", color=GNC_AMBER, lw=1.6,
+              label="slope -1/2 : angle random walk (ARW)")
+    ax.hlines(ad[i0], tau[max(i0-6, 0)], tau[-1], color="#C0392B", ls=":", lw=1.8,
+              label=f"slope 0 : bias instability = {ad[i0]:.4f} deg/h")
+    ax.plot(tau[i0], ad[i0], "o", color="#C0392B", ms=8, mfc="none", mew=2)
+    ax.set_xlim(tau[0]*0.7, tau[-1]*1.5)
+    ax.set_xlabel("Averaging time tau [s]"); ax.set_ylabel("Allan deviation sigma(tau) [deg/h]")
+    ax.set_title("Allan deviation plot - slopes separate the error components")
+    ax.grid(True, which="both", color="#E2E8F0"); ax.legend(fontsize=8.5, loc="lower left")
+    plt.show()
+
+    print(f"Plot minimum (bias instability) = {ad[i0]:.4f} deg/h  at tau = {tau[i0]:.0f} s")
+    print("-> This floor cannot be removed by calibration. Navigation specs are written against it.")
+
+
+
+
+def ex2_6_error_growth():
+    """[Exercise 2-6] How a gyro bias grows into attitude, velocity and position error"""
+    # [Exercise 2-6] How a gyro bias grows into attitude, velocity and position error
+    def err_growth(bias_dph, t_min):
+        # gyro bias [deg/h] -> attitude / velocity / position error after t [min]
+        b = np.radians(bias_dph/3600.0)        # [rad/s]
+        t = t_min*60.0
+        dtheta = b*t                            # [rad]
+        dV     = 0.5*GNC_G0*b*t**2                  # [m/s]
+        dp     = (1/6)*GNC_G0*b*t**3                # [m]
+        return np.degrees(dtheta), dV, dp
+
+    _, dV1, dp1 = err_growth(1.0, 1.0)
+    print(f"Rule-of-thumb check:  dV = {dV1:.4f} (m/s)/(deg/h)/min^2    dp = {dp1:.3f} m/(deg/h)/min^3")
+
+    rows = []
+    for b in [0.005, 0.01, 0.02, 0.05, 0.10, 1.0]:
+        th, dv, dpv = err_growth(b, 15.0)
+        rows.append([b, th, dv, dpv/1e3])
+    df = pd.DataFrame(rows, columns=["Gyro bias [deg/h]", "Attitude err [deg]",
+                                     "Velocity err [m/s]", "Position err [km]"])
+    df["Grade"] = ["Strategic", "Navigation", "Navigation", "Tactical (edge)", "Tactical", "AHRS"]
+    gnc_show(df.round(4), "== Error after 15 min (900 s) of pure inertial flight ==\n"
+                      "   Nuri INGU spec: attitude 0.1 deg, velocity 3.0 m/s, position 1.5 km")
+
+    tm = np.linspace(0, 15, 200)
+    fig, axes = plt.subplots(1, 3, figsize=(12.4, 3.3))
+    for b, c in zip([0.01, 0.02, 0.05, 0.10], GNC_PALETTE):
+        th, dv, dpv = err_growth(b, tm)
+        axes[0].plot(tm, th,      color=c, lw=2, label=f"{b:g} deg/h")
+        axes[1].plot(tm, dv,      color=c, lw=2)
+        axes[2].plot(tm, dpv/1e3, color=c, lw=2)
+    for ax, ttl, yl, spec in zip(axes,
+            ["Attitude error ~ t", "Velocity error ~ t^2", "Position error ~ t^3"],
+            ["Attitude error [deg]", "Velocity error [m/s]", "Position error [km]"], [0.1, 3.0, 1.5]):
+        ax.axhline(spec, color="#C0392B", ls="--", lw=1.2)
+        ax.set_ylim(0, spec*1.25)
+        ax.text(0.3, spec*0.94, f"Nuri spec {spec:g}", fontsize=8, color="#C0392B", va="top")
+        ax.set_xlabel("Flight time [min]"); ax.set_ylabel(yl); ax.set_title(ttl)
+        ax.grid(color="#E2E8F0"); ax.set_axisbelow(True)
+    axes[0].legend(title="Gyro bias", fontsize=8, title_fontsize=8)
+    plt.tight_layout(); plt.show()
+
+    print("\n-> After 15 min, 0.01 deg/h gives about %.0f m and 0.10 deg/h about %.0f m of position error."
+          % (err_growth(0.01, 15)[2], err_growth(0.10, 15)[2]))
+    print("-> One sensor grade can decide whether the payload reaches orbit.")
+    print("\n[Caution] These formulas assume a static, level platform. In flight, thrust acceleration,")
+    print("          frame transformation and alignment error also act. Use them for order-of-magnitude")
+    print("          intuition when setting requirements, not as a flight prediction.")
+
+
+
+
+def ex2_7_alignment():
+    """[Exercise 2-7] Limits of gyrocompassing: bias -> azimuth error"""
+    # [Exercise 2-7] Limits of gyrocompassing: bias -> azimuth error
+    #   At rest, the horizontal part of Earth rate (Omega*cos(lat)) points north.
+    #   A gyro bias b gives an azimuth error  d_psi ~ b / (Omega*cos(lat)).
+
+    lat = 34.43                                   # Naro Space Center latitude [deg]
+    Om_dph = np.degrees(GNC_OME)*3600                 # Earth rate [deg/h]
+    Om_h   = Om_dph*np.cos(np.radians(lat))       # horizontal component [deg/h]
+    print(f"Earth rate = {Om_dph:.3f} deg/h,  horizontal component at {lat} deg N = {Om_h:.3f} deg/h")
+
+    rows = []
+    for b, grade in [(0.005, "Strategic"), (0.01, "Navigation"), (0.1, "Tactical"), (1.0, "AHRS")]:
+        dpsi = np.degrees(np.arcsin(np.clip(b/Om_h, -1, 1)))
+        rows.append([grade, b, dpsi, "OK" if dpsi < 0.025 else "NO (optical alignment needed)"])
+    df = pd.DataFrame(rows, columns=["Grade", "Gyro bias [deg/h]", "Azimuth error [deg]",
+                                     "Meets Nuri 0.025 deg?"])
+    gnc_show(df.round(4), "== Can azimuth be set by gyrocompassing alone? ==")
+    print("\n-> Even a navigation-grade 0.01 deg/h gyro gives %.3f deg, above the 0.025 deg requirement." %
+          np.degrees(np.arcsin(0.01/Om_h)))
+    print("-> That is why launchers inject azimuth by OPTICAL alignment (theodolite) on the pad.")
+
+    # --- coarse alignment (TRIAD) implemented directly ---
+    def coarse_align(f_b, w_b, lat_deg):
+        # estimate the body->NED DCM from static IMU output (f_b: specific force, w_b: rate)
+        phi = np.radians(lat_deg)
+        g_n = np.array([0, 0, -GNC_G0])                                  # gravity in NED (down positive)
+        w_n = GNC_OME*np.array([np.cos(phi), 0, -np.sin(phi)])           # Earth rate in NED
+        def triad(a, b):
+            e1 = a/np.linalg.norm(a)
+            e2 = np.cross(a, b); e2 /= np.linalg.norm(e2)
+            return np.column_stack([e1, e2, np.cross(e1, e2)])
+        Mn = triad(-g_n, w_n)            # reference frame
+        Mb = triad(f_b,  w_b)            # body-frame observation (static: f_b = -g_b)
+        return Mn @ Mb.T                 # C_b^n
+
+    def euler_to_dcm(r, p, y):
+        cr, sr, cp, sp, cy, sy = np.cos(r), np.sin(r), np.cos(p), np.sin(p), np.cos(y), np.sin(y)
+        return np.array([[cp*cy, sr*sp*cy-cr*sy, cr*sp*cy+sr*sy],
+                         [cp*sy, sr*sp*sy+cr*cy, cr*sp*sy-sr*cy],
+                         [-sp,   sr*cp,          cr*cp]])
+
+    C_true = euler_to_dcm(*np.radians([2.0, -3.0, 35.0]))           # roll 2, pitch -3, yaw 35 deg
+    phi = np.radians(lat)
+    f_n = np.array([0, 0, GNC_G0]); w_n = GNC_OME*np.array([np.cos(phi), 0, -np.sin(phi)])
+    f_b_true, w_b_true = C_true.T @ f_n, C_true.T @ w_n
+
+    print("\n== Coarse alignment accuracy (TRIAD) vs gyro bias ==")
+    for b_dph in [0.0, 0.01, 0.1]:
+        bias  = np.radians(b_dph/3600)*np.array([1, 1, 1])/np.sqrt(3)
+        C_est = coarse_align(f_b_true, w_b_true + bias, lat)
+        dC    = C_est.T @ C_true
+        ang   = np.degrees(np.arccos(np.clip((np.trace(dC)-1)/2, -1, 1)))
+        print(f"  gyro bias {b_dph:5.3f} deg/h  ->  attitude estimate error {ang:7.4f} deg")
+
+
+
+
+def ex2_8_ins_gnss_kf():
+    """[Exercise 2-8] Loosely coupled INS/GNSS - a 1-D Kalman filter removes the drift"""
+    # [Exercise 2-8] Loosely coupled INS/GNSS - a 1-D Kalman filter removes the drift
+    #   INS: smooth and low-noise, but drifts with bias.  GNSS: noisy, but unbiased.
+
+    dt_k, T_k = 0.01, 900.0                   # 100 Hz, 900 s (the Nuri navigation-spec duration)
+    n = int(T_k/dt_k); t_k = np.arange(n)*dt_k
+    rng = np.random.default_rng(11)
+
+    acc_bias  = 50e-6*GNC_G0                      # 50 ug accelerometer bias (navigation grade)
+    acc_noise = 50e-6*GNC_G0*10
+    true_a = np.zeros(n)
+    meas_a = true_a + acc_bias + rng.normal(0, acc_noise, n)
+
+    # --- pure INS (integration only) ---
+    v_ins = np.cumsum(meas_a)*dt_k
+    p_ins = np.cumsum(v_ins)*dt_k
+
+    # --- INS/GNSS Kalman filter (states: position, velocity, accel bias) ---
+    F = np.array([[1, dt_k, -0.5*dt_k**2],
+                  [0, 1,    -dt_k],
+                  [0, 0,     1]])
+    B = np.array([0.5*dt_k**2, dt_k, 0.0])
+    Q = np.diag([1e-8, 1e-6, 1e-12])
+    H = np.array([[1.0, 0, 0]])
+    gnss_sig, gnss_hz = 5.0, 1.0              # GNSS position noise 5 m at 1 Hz
+    R = np.array([[gnss_sig**2]])
+    x = np.zeros(3); P = np.diag([10.0**2, 1.0**2, (100e-6*GNC_G0)**2])
+    p_kf, b_kf = np.zeros(n), np.zeros(n)
+    step = int(1/gnss_hz/dt_k)
+    for k in range(n):
+        x = F @ x + B*meas_a[k]; P = F @ P @ F.T + Q
+        if k % step == 0:
+            z = np.array([0.0 + rng.normal(0, gnss_sig)])
+            y = z - H @ x
+            S = H @ P @ H.T + R
+            K = P @ H.T @ np.linalg.inv(S)
+            x = x + (K @ y).ravel(); P = (np.eye(3) - K @ H) @ P
+        p_kf[k], b_kf[k] = x[0], x[2]
+
+    print(f"After 900 s:  pure INS position error = {abs(p_ins[-1]):10.1f} m")
+    print(f"              INS/GNSS coupled        = {abs(p_kf[-1]):10.1f} m")
+    print(f"Bias estimate: true {acc_bias/GNC_G0*1e6:.1f} ug -> estimated {b_kf[-1]/GNC_G0*1e6:.1f} ug")
+
+    fig, axes = plt.subplots(1, 2, figsize=(11.4, 3.4))
+    axes[0].plot(t_k, p_ins, color="#C0392B", lw=1.8, label="Pure INS (drifts)")
+    axes[0].plot(t_k, p_kf,  color=GNC_NAVY, lw=1.6, label="INS/GNSS coupled")
+    axes[0].axhline(0, color=GNC_MUTED, ls=":", lw=1)
+    axes[0].set_xlabel("Time [s]"); axes[0].set_ylabel("Position error [m]"); axes[0].set_yscale("symlog")
+    axes[0].set_title("Effect of a 50 ug accelerometer bias"); axes[0].legend(fontsize=8.5)
+    axes[1].plot(t_k, b_kf/GNC_G0*1e6, color=GNC_AMBER, lw=1.8, label="Kalman estimate")
+    axes[1].axhline(acc_bias/GNC_G0*1e6, color=GNC_NAVY, ls="--", lw=1.4, label="True bias 50 ug")
+    axes[1].set_xlabel("Time [s]"); axes[1].set_ylabel("Accelerometer bias [ug]")
+    axes[1].set_title("Coupling also estimates the sensor bias"); axes[1].legend(fontsize=8.5)
+    for a in axes: a.grid(color="#E2E8F0"); a.set_axisbelow(True)
+    plt.tight_layout(); plt.show()
+
+    print("\n-> The point of coupling is not to 'fix the position' but to ESTIMATE and remove the error source.")
+    print("   That is why performance holds for a while even after GNSS is lost (coasting).")
+
+
+
+
+def ex3_1_error_budget():
+    """[Exercise 3-1] dV error budget of a 3-stage launcher and RSS combination"""
+    # [Exercise 3-1] dV error budget of a 3-stage launcher and RSS combination
+    budget = pd.DataFrame({
+        "Error source": ["Inert mass", "LOX loading", "Fuel loading", "Mixture ratio (MR)",
+                         "Thrust", "Specific impulse", "Drag"],
+        "+/-3 sigma [%]": ["+0.30", "-0.63 ~ -1.29", "+0.62 ~ +0.74", "+1.00 ~ +2.00",
+                           "-2.40 ~ +2.40", "-0.80", "+15.00"],
+        "Stage 1 dV [m/s]": [1.6, 18.1,  8.9, 18.9, 40.4, 24.8, 16.1],
+        "Stage 2 dV [m/s]": [2.6, 17.9, 11.4, 36.7, 11.6, 26.5, 0.0],
+        "Stage 3 dV [m/s]": [4.7, 60.7, 31.6, 88.6,  7.4, 38.2, 0.0],
+    })
+    rss = lambda v: float(np.sqrt(np.sum(np.asarray(v, float)**2)))
+    stage_cols = ["Stage 1 dV [m/s]", "Stage 2 dV [m/s]", "Stage 3 dV [m/s]"]
+    stage_rss  = {c: rss(budget[c]) for c in stage_cols}
+    total_rss  = rss(list(stage_rss.values()))
+    gnc_show(budget, "== dV error budget of an example 3-stage launcher ==")
+    print("\nPer-stage RSS :", "   ".join(f"Stage {i+1}: {v:6.1f} m/s" for i, v in enumerate(stage_rss.values())))
+    print(f"Total RSS     : {total_rss:.1f} m/s")
+
+    dv_total = 9300.0
+    print(f"\n-> A total RSS of {total_rss:.0f} m/s is {total_rss/dv_total*100:.2f}% of the {dv_total:,.0f} m/s total dV,")
+    print("   yet the allowed insertion error is far smaller. Closed-loop guidance exists to bridge that gap.")
+
+    fig, ax = plt.subplots(figsize=(8.8, 3.4))
+    idx = np.arange(len(budget)); w = 0.26
+    for i, (c, col) in enumerate(zip(stage_cols, [GNC_NAVY, GNC_STEEL, GNC_AMBER])):
+        ax.bar(idx + (i-1)*w, budget[c], width=w, color=col, label=f"Stage {i+1}")
+    ax.set_xticks(idx)
+    ax.set_xticklabels(budget["Error source"], rotation=20, ha="right", fontsize=9)
+    ax.set_ylabel("dV dispersion [m/s]"); ax.legend(fontsize=9, frameon=False)
+    ax.set_title("dV contribution by error source and stage - MR and propellant loading dominate upper stages",
+                 color=GNC_NAVY, fontweight="bold", fontsize=10.5)
+    ax.grid(axis="y", color="#E2E8F0"); ax.set_axisbelow(True)
+    for s in ["top", "right"]: ax.spines[s].set_visible(False)
+    plt.show()
+
+
+
+
+def ex3_2_deorbit():
+    """[Exercise 3-2] Velocity error -> orbit error, and the "failure to reach orbit" threshold"""
+    # [Exercise 3-2] Velocity error -> orbit error, and the "failure to reach orbit" threshold
+
+    def deorbit_margin(h_circ_km):
+        # velocity shortfall [m/s] that drops perigee to the surface (r = RE)
+        r = GNC_RE + h_circ_km*1e3
+        v_circ = np.sqrt(GNC_MU/r)
+        a_t = (r + GNC_RE)/2
+        v_apo = np.sqrt(GNC_MU*(2/r - 1/a_t))
+        return v_circ - v_apo, v_circ
+
+    def orbit_sensitivity(h_km, dV):
+        # semi-major-axis and apogee change caused by velocity error dV on a circular orbit
+        r = GNC_RE + h_km*1e3; a = r; V = np.sqrt(GNC_MU/r)
+        da   = 2*a**2/GNC_MU * V * dV
+        dh_a = 4*a**2/GNC_MU * V * dV
+        return da, dh_a
+
+    rows = []
+    for h in [200, 300, 500, 700]:
+        dvm, vc = deorbit_margin(h)
+        da, dha = orbit_sensitivity(h, 3.0)
+        rows.append([h, vc, dvm, dvm/9300*100, da/1e3, dha/1e3])
+    df = pd.DataFrame(rows, columns=["Circular alt [km]", "Circular speed [m/s]", "Failure threshold dV [m/s]",
+                                     "Share of total dV [%]", "da @ 3 m/s [km]", "dh_apogee @ 3 m/s [km]"])
+    gnc_show(df.round(2), "== Orbital-mechanics consequences of velocity error ==")
+
+    fig, axes = plt.subplots(1, 2, figsize=(11.4, 3.4))
+    dv = np.linspace(-12, 12, 200)
+    for h, c in zip([200, 300, 700], [GNC_NAVY, GNC_STEEL, GNC_AMBER]):
+        _, dha = orbit_sensitivity(h, dv)
+        axes[0].plot(dv, dha/1e3, color=c, lw=2, label=f"{h} km circular")
+    axes[0].axhspan(-35, 35, color="#E2E8F0", zorder=0)
+    axes[0].text(-11.5, 31, "Nuri SSO apogee tolerance +/-35 km", fontsize=8, color=GNC_MUTED, va="top")
+    axes[0].axvline(3, color="#C0392B", ls=":", lw=1.2); axes[0].axvline(-3, color="#C0392B", ls=":", lw=1.2)
+    axes[0].text(3.4, -42, "+/-3 m/s", fontsize=8, color="#C0392B")
+    axes[0].set_xlabel("Injection velocity error dV [m/s]"); axes[0].set_ylabel("Apogee altitude change [km]")
+    axes[0].set_title("3 m/s becomes ~10 km"); axes[0].legend(fontsize=8.5)
+
+    hs = np.linspace(150, 1000, 200)
+    margins = np.array([deorbit_margin(h)[0] for h in hs])
+    axes[1].plot(hs, margins, color=GNC_NAVY, lw=2.2)
+    axes[1].axhline(141.3, color="#C0392B", ls="--", lw=1.6)
+    axes[1].text(170, 148, "3-sigma performance dispersion (RSS) = 141 m/s", fontsize=8.5, color="#C0392B")
+    axes[1].fill_between(hs, 0, margins, where=margins < 141.3, color="#C0392B", alpha=0.12)
+    axes[1].set_xlabel("Target circular altitude [km]"); axes[1].set_ylabel("Failure threshold [m/s]")
+    axes[1].set_title("Red zone: dispersion exceeds threshold - open loop may fail")
+    for a in axes: a.grid(color="#E2E8F0"); a.set_axisbelow(True)
+    plt.tight_layout(); plt.show()
+
+    h_cross = hs[np.argmin(np.abs(margins-141.3))]
+    print(f"-> Below about {h_cross:.0f} km, the 3-sigma performance dispersion (141 m/s) exceeds the failure threshold.")
+    print("   For low orbits, closed-loop guidance is therefore essential.")
+
+
+
+
+def ex3_3_qalpha(jet_ms=60.0):
+    """[Exercise 3-3] Q-alpha profile - how the jet stream drives structural load"""
+    # [Exercise 3-3] Q-alpha profile - how the jet stream drives structural load
+
+    def rho_isa(h):
+        # simple exponential atmosphere density [kg/m3]
+        return 1.225*np.exp(-h/8500.0)
+
+    h = np.linspace(0, 25e3, 400)
+    V = 60 + 420*(h/12e3)**1.25                    # airspeed vs altitude [m/s]
+    Q = 0.5*rho_isa(h)*V**2                        # dynamic pressure [Pa]
+
+    def wind(h, peak=60.0, h0=11e3, sig=3.0e3):
+        # jet-stream wind profile, peak 60 m/s near 11 km
+        return peak*np.exp(-0.5*((h-h0)/sig)**2)
+
+    W_nom = wind(h, jet_ms)
+    alpha_nowind   = np.radians(1.0)*np.ones_like(h)                 # design alpha margin
+    alpha_wind     = alpha_nowind + W_nom/V                          # extra alpha from wind
+    alpha_seasonal = alpha_nowind + (W_nom - wind(h, jet_ms*0.19))/V     # 19% compensated by seasonal mean wind
+    alpha_dol      = alpha_nowind + (W_nom - wind(h, jet_ms*0.62))/V     # 62% compensated by day-of-launch wind
+
+    Qa = {"(1) No wind (lower bound)":    Q*np.degrees(alpha_nowind),
+          "(2) Actual wind, uncompensated": Q*np.degrees(alpha_wind),
+          "(3) Seasonal wind biasing":    Q*np.degrees(alpha_seasonal),
+          "(4) Day-of-launch wind":       Q*np.degrees(alpha_dol)}
+
+    fig, axes = plt.subplots(1, 3, figsize=(12.6, 3.5))
+    axes[0].plot(Q/1e3, h/1e3, color=GNC_NAVY, lw=2); axes[0].set_xlabel("Dynamic pressure Q [kPa]")
+    axes[0].set_ylabel("Altitude [km]")
+    axes[0].set_title(f"Dynamic pressure (max {Q.max()/1e3:.0f} kPa @ {h[np.argmax(Q)]/1e3:.1f} km)")
+    axes[1].plot(W_nom, h/1e3, color=GNC_AMBER, lw=2); axes[1].set_xlabel("Wind speed [m/s]")
+    axes[1].set_title("Jet-stream profile")
+    for (k, v), c in zip(Qa.items(), ["#B9C6D3", "#C0392B", GNC_STEEL, GNC_NAVY]):
+        axes[2].plot(v/1e3, h/1e3, color=c, lw=2, label=k)
+    axes[2].set_xlabel("Q-alpha [kPa*deg]"); axes[2].set_title("Q-alpha gauge - proxy for structural load")
+    axes[2].legend(fontsize=7.5)
+    for a in axes: a.grid(color="#E2E8F0"); a.set_axisbelow(True); a.set_ylim(0, 25)
+    plt.tight_layout(); plt.show()
+
+    base = Qa["(2) Actual wind, uncompensated"].max()
+    print("== Peak Q-alpha and reduction relative to (2) uncompensated ==")
+    for k, v in Qa.items():
+        tag = "  <- unattainable lower bound" if k.startswith("(1)") else ""
+        print(f"  {k:<32s} max Q-alpha = {v.max()/1e3:7.1f} kPa*deg   ({(1-v.max()/base)*100:5.1f}% reduction){tag}")
+    print("\n-> Seasonal biasing ~17% and day-of-launch ~55%: the same order as reported in the literature")
+    print("   (seasonal 15-19%, day-of-launch 50%+).")
+    print("   Q-alpha reduction is structural margin, and structural margin converts into payload mass at design time.")
+
+
+
+
+def ex3_4_steering(hc_km=180.0):
+    """[Exercise 3-4] Solve the linear-tangent steering law numerically and check optimality"""
+    # [Exercise 3-4] Solve the linear-tangent steering law numerically and check optimality
+    #   Solve a flat-Earth ascent with three different steering-law FORMS and compare propellant.
+    from scipy.integrate import solve_ivp
+    from scipy.optimize import least_squares
+
+    # --- upper-stage-like vehicle ---
+    Isp_s, m0_s, TW = 350.0, 100_000.0, 1.6
+    T_s   = TW*m0_s*GNC_G0
+    mdot  = T_s/(Isp_s*GNC_G0)
+    hc, vc = hc_km*1e3, 7800.0                   # terminal: 180 km altitude, 7800 m/s horizontal, 0 vertical speed
+    SC = np.array([1e4, 1e2, 1e2])           # residual scaling
+
+    def propagate(alpha_fn, tf):
+        def rhs(t, s):
+            _, _, vx, vy = s
+            acc = T_s/(m0_s - mdot*t)
+            a = alpha_fn(t)
+            return [vx, vy, acc*np.cos(a), acc*np.sin(a) - GNC_G0]
+        return solve_ivp(rhs, [0, tf], [0, 0, 0, 0], rtol=1e-10, atol=1e-8, dense_output=True)
+
+    def solve_family(fam, guess):
+        def resid(p):
+            s = propagate(fam(p), p[2]).y[:, -1]
+            return np.array([s[1]-hc, s[2]-vc, s[3]])/SC
+        r = least_squares(resid, guess, xtol=1e-14, ftol=1e-14)
+        return r.x, np.max(np.abs(resid(r.x)*SC))
+
+    families = {
+        "Linear tangent  (tan a = A t + B)  [optimal]":
+            (lambda p: (lambda t: np.arctan(p[0]*t + p[1])), [-0.01, 1.0, 200.0]),
+        "Linear sine  (sin a = A t + B)  [Atlas-Centaur, H-I]":
+            (lambda p: (lambda t: np.arcsin(np.clip(p[0]*t + p[1], -1, 1))), [-0.006, 0.95, 206.0]),
+        "Linear angle  (a = A + B t)":
+            (lambda p: (lambda t: p[0] + p[1]*t), [1.27, -0.0085, 206.0]),
+    }
+    short = {k: k.split("  (")[0] for k in families}
+
+    res, sols = [], {}
+    for name, (fam, g_) in families.items():
+        p, err = solve_family(fam, g_)
+        sols[name] = (fam(p), p)
+        res.append([name, p[2], mdot*p[2], err])
+
+    df = pd.DataFrame(res, columns=["Steering-law form", "Burn time t_f [s]",
+                                    "Propellant [kg]", "Terminal residual [max]"])
+    df["Extra vs optimal [kg]"] = df["Propellant [kg]"] - df["Propellant [kg]"].min()
+    gnc_show(df.round(3), "== Three steering-law FORMS meeting the same terminal conditions ==")
+
+    best = df.loc[df["Propellant [kg]"].idxmin(), "Steering-law form"].split("  (")[0]
+    print(f"\n-> The form that uses the least propellant is '{best}' - as optimal-control theory predicts.")
+    print(f"-> Linear sine costs {df['Extra vs optimal [kg]'].iloc[1]:,.0f} kg more; "
+          f"linear angle costs {df['Extra vs optimal [kg]'].iloc[2]:,.0f} kg more.")
+    print("   1,000 kg of upper-stage propellant is several hundred kg of LEO payload: the choice of form IS performance.")
+    print("\n[How to read] In the middle panel only the optimal law gives a smooth monotonic decrease.")
+    print("  Linear sine saturates at 90 deg early (arcsin limit) and wastes thrust vertically;")
+    print("  linear angle demands a physically awkward attitude above 90 deg at the start.")
+
+    fig, axes = plt.subplots(1, 3, figsize=(12.8, 3.5))
+    for (name, (afn, p)), c in zip(sols.items(), [GNC_NAVY, GNC_AMBER, "#C0392B"]):
+        sol = propagate(afn, p[2]); tt = np.linspace(0, p[2], 300); yy = sol.sol(tt)
+        lbl = short[name]
+        axes[0].plot(yy[0]/1e3, yy[1]/1e3, color=c, lw=2, label=lbl)
+        axes[1].plot(tt, np.degrees([afn(x) for x in tt]), color=c, lw=2, label=lbl)
+        axes[2].plot(tt, yy[2], color=c, lw=2); axes[2].plot(tt, yy[3], color=c, lw=1, ls="--")
+    axes[0].set_xlabel("Downrange [km]"); axes[0].set_ylabel("Altitude [km]"); axes[0].set_title("Ascent trajectory")
+    axes[0].legend(fontsize=8)
+    axes[1].set_xlabel("Time [s]"); axes[1].set_ylabel("Thrust direction angle [deg]")
+    axes[1].set_title("Steering command"); axes[1].legend(fontsize=8)
+    axes[2].set_xlabel("Time [s]"); axes[2].set_ylabel("Velocity [m/s]")
+    axes[2].set_title("Horizontal (solid) / vertical (dashed) velocity")
+    for a in axes: a.grid(color="#E2E8F0"); a.set_axisbelow(True)
+    plt.tight_layout(); plt.show()
+
+
+
+
+def ex3_5_igm_tgo():
+    """[Exercise 3-5] The heart of IGM - t_go and the integrals L, J, S, Q"""
+    # [Exercise 3-5] The heart of IGM - t_go and the integrals L, J, S, Q
+
+    def igm_terms(a0, Vex, tgo):
+        # IGM integrals: L (velocity), J (velocity x time), S (position), Q (position x time)
+        tau = Vex/a0                                   # acceleration time constant
+        L = -Vex*np.log(1 - tgo/tau)                   # integral of a dt      = required velocity gain
+        J = L*tau - Vex*tgo                            # integral of a t dt
+        S = L*tgo - J                                  # double integral       = position contribution
+        Q = J*tau - 0.5*Vex*tgo**2
+        return L, J, S, Q, tau
+
+    def tgo_from_dv(a0, Vex, dV):
+        # burn time needed to gain dV (inverse of the rocket equation)
+        tau = Vex/a0
+        return tau*(1 - np.exp(-dV/Vex))
+
+    Isp3, a0_3 = 325.0, 8.5
+    Vex = Isp3*GNC_G0
+    print(f"Stage-3 assumption: Isp = {Isp3:.0f} s -> Vex = {Vex:,.0f} m/s,  current acceleration a0 = {a0_3:.1f} m/s2")
+    print(f"                    acceleration time constant tau = Vex/a0 = {Vex/a0_3:,.1f} s\n")
+
+    rows = []
+    for dV in [500, 1000, 1500, 2000, 2500]:
+        tgo = tgo_from_dv(a0_3, Vex, dV)
+        L, J, S, Q, tau = igm_terms(a0_3, Vex, tgo)
+        rows.append([dV, tgo, L, J/1e3, S/1e3, Q/1e6])
+    df = pd.DataFrame(rows, columns=["Required dV [m/s]", "t_go [s]", "L [m/s]", "J [km]", "S [km]", "Q [1e6 m*s]"])
+    gnc_show(df.round(2), "== t_go and integral terms vs required velocity gain ==")
+    print("\nCheck: L must equal the required dV ->", np.allclose(df['L [m/s]'], df['Required dV [m/s]'], rtol=1e-6))
+
+    print("\n== With a thrust dispersion: open loop vs closed loop ==")
+    dV_need = 2000.0
+    for dT in [-0.024, 0.0, +0.024]:                   # thrust +/-2.4% (3 sigma)
+        a0p = a0_3*(1+dT)
+        tgo_nom = tgo_from_dv(a0_3, Vex, dV_need)       # cutoff time fixed before flight
+        tau_p   = Vex/a0p
+        dV_ol   = -Vex*np.log(1 - tgo_nom/tau_p)        # open loop: fixed time -> dV varies
+        tgo_cl  = tgo_from_dv(a0p, Vex, dV_need)        # closed loop: fixed dV -> time varies
+        print(f"  thrust {dT*100:+5.1f}% | open loop: cutoff {tgo_nom:6.1f} s fixed -> dV {dV_ol:7.1f} m/s "
+              f"(error {dV_ol-dV_need:+6.1f}) | closed loop: dV {dV_need:.0f} m/s -> cutoff {tgo_cl:6.1f} s "
+              f"({tgo_cl-tgo_nom:+5.1f} s)")
+    print("\n-> Open loop fixes the TIME and leaves a velocity error; closed loop fixes the VELOCITY and moves the time.")
+    print("   Compare with the ~60 m/s failure threshold of Exercise 3-2 to see why closed loop is mandatory.")
+
+
+
+
+def ex4_1_nuri_specs():
+    """[Exercise 4-1] Nuri (KSLV-II): mission requirement, INGU spec, per-stage guidance and control"""
+    # [Exercise 4-1] Nuri (KSLV-II): mission requirement, INGU spec, per-stage guidance and control
+
+    mission = pd.DataFrame({
+        "Item": ["Payload mass", "Perigee altitude", "Apogee altitude", "Inclination"],
+        "SSO":  ["1,500 kg", "700 +/- 7 km",  "700 +/- 35 km", "98.2 +/- 0.1 deg"],
+        "LEO":  ["2,600 kg", "300 +/- 3 km",  "300 +/- 20 km", "80.3 +/- 0.1 deg"],
+    })
+    gnc_show(mission, "== (1) Mission requirements ==")
+
+    ingu = pd.DataFrame({
+        "Item": ["Alignment - azimuth", "Alignment - level", "Navigation - attitude",
+                 "Navigation - velocity", "Navigation - position"],
+        "Spec (3 sigma)": ["0.025 deg", "0.014 deg", "0.1 deg", "3.0 m/s", "1.5 km"],
+        "Note": ["optical alignment", "-", "over 900 s", "over 900 s", "over 900 s"],
+    })
+    gnc_show(ingu, "\n== (2) Inertial Navigation & Guidance Unit (INGU) performance spec ==")
+
+    stages = pd.DataFrame({
+        "Stage / phase": ["Stage 1", "Stage 2", "Stage 3 (powered)", "Stage 3 (coast)"],
+        "Engine cutoff": ["propellant depletion", "propellant depletion", "commanded by guidance", "-"],
+        "Guidance": ["Load-relief w/ day-of-launch wind", "Nominal open loop", "Closed loop", "Nominal open loop"],
+        "Attitude control": ["4-engine TVC, 3 axes", "1-engine TVC + turbine exhaust nozzle",
+                             "1-engine TVC + RCS", "RCS, 3 axes"],
+    })
+    gnc_show(stages, "\n== (3) Guidance and control by stage ==")
+
+    print('''
+    == Hardware ==
+      - Navigation, guidance and control integrated in a single unit; strapdown inertial navigation
+      - Sensor block: 3 domestic fibre-optic gyros (KFG-1200) + 4 accelerometers
+      - On-board computer: PowerPC 7410 450 MHz, MIL-STD-1553B and RS-422
+
+    >> Insertion accuracy = (1) navigation performance + (2) guidance accuracy + (3) residual-thrust modelling error.
+       As the flight result shows, (3) was the dominant term.''')
+
+    need_bias = 3.0/(0.5*GNC_G0*(900.0)**2) * 3600 * (180/np.pi)
+    print(f"\n[Back-calculation] If gyro bias ALONE caused the 3.0 m/s velocity error over 900 s: bias <~ {need_bias:.3f} deg/h.")
+    print("  In reality alignment error, accelerometer bias, scale factor and misalignment add in RSS.")
+    print("  Splitting the budget evenly over n sources tightens each requirement by 1/sqrt(n):")
+    for n_src in [3, 5, 10]:
+        print(f"    - {n_src:2d} sources -> gyro bias <~ {need_bias/np.sqrt(n_src):.4f} deg/h")
+    print("  Adding margin for ageing, temperature and launch vibration lands near the 'navigation grade' 0.01 deg/h.")
+    print("  The spec is not an arbitrary number - it is the result of error budgeting.")
+
+
+
+
+def ex4_2_nuri_flight2():
+    """[Exercise 4-2] Decomposing the Nuri 2nd flight test (21 June 2022) into three parts"""
+    # [Exercise 4-2] Decomposing the Nuri 2nd flight test (21 June 2022) into three parts
+
+    nav = pd.DataFrame({
+        "Item":   ["Velocity difference dV", "Altitude difference dh", "Range difference dR"],
+        "Result": [0.7, -0.4, 0.47],
+        "Unit":   ["m/s", "km", "km"],
+        "Spec (3 sigma)": [3.0, 1.5, 1.5],
+    })
+    nav["Spec used [%]"] = (nav["Result"].abs()/nav["Spec (3 sigma)"]*100).round(1)
+    gnc_show(nav, "== (1) Navigation performance over 900 s, vs GNSS ==")
+    print("-> The inertial solution stayed within about 1/3 of spec for 900 s. Navigation met its requirement with margin.\n")
+
+    guid = pd.DataFrame({
+        "Item": ["Cutoff time [s]", "Radius R [km]", "Speed V [m/s]", "Flight-path angle [deg]",
+                 "RAAN difference [deg]", "Inclination [deg]"],
+        "Nominal design": [526.48, 7078.137, 7497.837, 0.0090, 1.5436, 98.1700],
+        "Guidance result": [509.13, 7078.105, 7497.691, 0.0256, 1.5492, 98.1470],
+    })
+    guid["Difference"] = (guid["Guidance result"] - guid["Nominal design"]).round(4)
+    gnc_show(guid, "== (2) Stage-3 engine cutoff state (time from T3) ==")
+
+    orbit = pd.DataFrame({
+        "Item": ["Perigee altitude [km]", "Apogee altitude [km]", "Inclination [deg]"],
+        "Requirement": ["700 +/- 7", "700 +/- 35", "98.19 +/- 0.1"],
+        "Tolerance": [7.0, 35.0, 0.1],
+        "Result": [699.79, 707.84, 98.17],
+        "Target": [700.0, 700.0, 98.19],
+    })
+    orbit["Error"] = (orbit["Result"] - orbit["Target"]).abs().round(3)
+    orbit["Share of tolerance [%]"] = (orbit["Error"]/orbit["Tolerance"]*100).round(1)
+    gnc_show(orbit, "\n== (3) Achieved orbit at satellite separation ==")
+
+    print('''
+    == How to read the result ==
+      - Cutoff came 17.35 s earlier than nominal: real performance was better than nominal, and the
+        closed-loop guidance absorbed that surplus exactly.
+      - The error created by the guidance algorithm itself is ~0.03 km and ~0.15 m/s: negligible.
+      - What remains - especially the 7.84 km apogee excess - comes mostly from the stage-3 RESIDUAL THRUST
+        prediction error: modelling thrust that keeps acting after the cutoff command.''')
+
+    r_p = GNC_RE + 699.79e3; r_a = GNC_RE + 707.84e3
+    a_act = (r_p + r_a)/2; V_p = np.sqrt(GNC_MU*(2/r_p - 1/a_act))
+    dV_res = (r_a - r_p)/2 * GNC_MU/(2*a_act**2*V_p)
+    print(f"\n[Back-calculation] A {(r_a-r_p)/1e3:.2f} km apogee-perigee gap corresponds to about {dV_res:.2f} m/s of")
+    print("  residual velocity increment at perigee. Guidance cannot control what happens AFTER the cutoff command.")
+
+    fig, ax = plt.subplots(figsize=(8.6, 3.0))
+    items = ["Perigee altitude", "Apogee altitude", "Inclination"]
+    usage = orbit["Share of tolerance [%]"].values
+    bars = ax.barh(items, usage, color=[GNC_NAVY, GNC_AMBER, GNC_STEEL], height=0.5)
+    ax.axvline(100, color="#C0392B", ls="--", lw=1.6)
+    ax.text(101, 2.35, "Tolerance limit", color="#C0392B", fontsize=9)
+    for b, v, d in zip(bars, usage, orbit["Error"]):
+        ax.text(v+2, b.get_y()+b.get_height()/2, f"{v:.1f}%  (error {d:g})", va="center", fontsize=9, color=GNC_NAVY)
+    ax.set_xlim(0, 125); ax.set_xlabel("Actual error as a share of tolerance [%]")
+    ax.set_title("Nuri flight 2 - all three orbital elements well inside tolerance", color=GNC_NAVY, fontweight="bold")
+    ax.grid(axis="x", color="#E2E8F0"); ax.set_axisbelow(True)
+    for s in ["top", "right"]: ax.spines[s].set_visible(False)
+    plt.show()
+
+
+
+# =============================================================================
+#  PART B - INS deep-dive figures (new)
+# =============================================================================
+GNC_RED, GNC_LIGHT = "#C0392B", "#7BA0C0"
+
+def _gnc_style(ax, grid="both"):
+    for sp in ["top", "right"]:
+        ax.spines[sp].set_visible(False)
+    if grid:
+        ax.grid(axis=grid if grid != "both" else "both", color="#E2E8F0", lw=0.8)
+    ax.set_axisbelow(True)
+
+def _gnc_title(ax, s, **kw):
+    ax.set_title(s, color=GNC_NAVY, fontweight="bold", fontsize=kw.pop("fontsize", 11), **kw)
+
+
+# -----------------------------------------------------------------------------
+# 2-A  Strapdown IMU anatomy (schematic)
+# -----------------------------------------------------------------------------
+def ins_anatomy():
+    """Schematic of a launch-vehicle strapdown inertial navigation & guidance unit."""
+    fig, ax = plt.subplots(figsize=(11.5, 5.2))
+    ax.set_xlim(0, 12); ax.set_ylim(0, 6.2); ax.axis("off")
+
+    def box(x, y, w, h, t, s="", fc=GNC_NAVY, tc="white", fs=10.5):
+        ax.add_patch(plt.Rectangle((x, y), w, h, facecolor=fc, edgecolor="none", zorder=2))
+        ax.text(x + w/2, y + h*(0.63 if s else 0.5), t, ha="center", va="center",
+                color=tc, fontsize=fs, fontweight="bold", zorder=3)
+        if s:
+            ax.text(x + w/2, y + h*0.27, s, ha="center", va="center",
+                    color="#D9E2EC" if tc == "white" else GNC_MUTED, fontsize=8, zorder=3)
+
+    def arr(x0, y0, x1, y1, c=GNC_AMBER, lab=None, lx=None, ly=None):
+        ax.annotate("", xy=(x1, y1), xytext=(x0, y0),
+                    arrowprops=dict(arrowstyle="-|>", color=c, lw=1.7))
+        if lab:
+            ax.text(lx, ly, lab, fontsize=8, color=GNC_MUTED, ha="center")
+
+    # housing
+    ax.add_patch(plt.Rectangle((0.3, 0.4), 7.6, 5.4, facecolor="#F0F4F8",
+                               edgecolor=GNC_STEEL, lw=1.5, ls="--"))
+    ax.text(0.45, 5.55, "INGU housing (strapped to the vehicle frame)", fontsize=9,
+            color=GNC_STEEL, fontweight="bold")
+    # sensor block on isolators
+    ax.add_patch(plt.Rectangle((0.7, 2.6), 3.3, 2.6, facecolor="white", edgecolor=GNC_NAVY, lw=1.3))
+    ax.text(2.35, 4.95, "Sensor block (rigid, temp.-controlled)", ha="center",
+            fontsize=8.2, color=GNC_NAVY, fontweight="bold")
+    for i, lab in enumerate(["Gyro X", "Gyro Y", "Gyro Z"]):
+        box(0.9 + i*1.03, 3.75, 0.9, 0.8, lab, "FOG/RLG", fc=GNC_NAVY, fs=8.5)
+    for i, lab in enumerate(["Acc X", "Acc Y", "Acc Z"]):
+        box(0.9 + i*1.03, 2.8, 0.9, 0.8, lab, "servo", fc=GNC_STEEL, fs=8.5)
+    for xx in [0.9, 3.6]:
+        ax.add_patch(plt.Circle((xx, 2.45), 0.15, color=GNC_AMBER, zorder=3))
+    ax.text(2.35, 1.98, "vibration isolators\n(mode well above control bandwidth)",
+            ha="center", va="top", fontsize=7.6, color="#8D6E00")
+
+    box(4.5, 3.75, 3.1, 1.2, "Sensor electronics", "light source, servo loops, A/D", fc=GNC_STEEL)
+    box(4.5, 2.3, 3.1, 1.2, "Navigation computer", "calib. comp. + strapdown + guidance", fc=GNC_NAVY)
+    box(0.7, 0.55, 3.3, 0.85, "Power supply / BIT", "health monitoring", fc="#9FB3C8", tc=GNC_NAVY)
+    box(4.5, 0.55, 3.1, 0.85, "Interfaces", "1553 / RS-422 / GNSS rx", fc="#9FB3C8", tc=GNC_NAVY)
+
+    arr(4.0, 4.3, 4.5, 4.3); arr(6.05, 3.75, 6.05, 3.5)
+    arr(7.6, 2.9, 8.6, 2.9)
+    ax.text(8.15, 2.45, "nav. solution\n+ commands", fontsize=7.3, color=GNC_MUTED, ha="center", va="top")
+    arr(6.05, 1.4, 6.05, 2.3, c=GNC_STEEL)
+
+    box(8.6, 4.2, 3.0, 1.0, "Flight computer", "control / sequencing", fc="#334E68")
+    box(8.6, 2.4, 3.0, 1.0, "TVC & RCS", "actuators", fc="#334E68")
+    box(8.6, 0.6, 3.0, 1.0, "Telemetry", "ground monitoring", fc="#334E68")
+    arr(10.1, 4.2, 10.1, 3.4, c=GNC_STEEL)
+    arr(7.6, 1.0, 8.6, 1.1, c=GNC_STEEL)
+    arr(8.1, 2.9, 8.1, 4.7); arr(8.1, 4.7, 8.6, 4.7)
+    _gnc_title(ax, "Anatomy of a strapdown inertial navigation & guidance unit (schematic)",
+           loc="left", fontsize=12.5)
+    plt.show()
+
+
+# -----------------------------------------------------------------------------
+# 2-B  Force-rebalance accelerometer: open loop vs closed loop
+# -----------------------------------------------------------------------------
+def _accel_sim(a_in_g, closed, beta=0.002, f_n=60.0, f_c=350.0, T=0.06, dt=2e-6):
+    wn = 2*np.pi*f_n; zeta = 0.6; wc = 2*np.pi*f_c
+    x0 = 9.80665*10/wn**2                       # displacement at 10 g (linear)
+    Kp, Kd, Ki = wc**2, 2*0.7*wc, wc**3/8
+    n = int(T/dt); t = np.arange(n)*dt
+    x = v = ix = 0.0
+    X = np.empty(n); A = np.empty(n)
+    a = a_in_g*9.80665
+    for k in range(n):
+        spring = wn**2*x*(1 + beta*(x/x0)**2)
+        F = (Kp*x + Kd*v + Ki*ix) if closed else 0.0
+        acc = a - spring - 2*zeta*wn*v - F
+        v += acc*dt; x += v*dt; ix += x*dt
+        X[k] = x
+        A[k] = (F + spring)/9.80665 if closed else wn**2*x/9.80665   # what each design reports
+    return t, X, A
+
+def accel_servo(a_step_g=10.0):
+    t, Xo, Ao = _accel_sim(a_step_g, closed=False)
+    _, Xc, Ac = _accel_sim(a_step_g, closed=True)
+    fig, axs = plt.subplots(1, 3, figsize=(13, 3.7))
+    ax = axs[0]
+    ax.plot(t*1e3, Xo*1e6, color=GNC_STEEL, lw=1.6, label="open loop")
+    ax.plot(t*1e3, Xc*1e6, color=GNC_AMBER, lw=2.0, label="closed loop (rebalanced)")
+    ax.set_xlabel("time [ms]"); ax.set_ylabel("proof-mass displacement [um]")
+    _gnc_title(ax, f"Proof mass after a {a_step_g:.0f} g step"); ax.legend(fontsize=8); _gnc_style(ax)
+    ax = axs[1]
+    ax.plot(t*1e3, Ao, color=GNC_STEEL, lw=1.4, label="open loop: k*x reading")
+    ax.plot(t*1e3, Ac, color=GNC_AMBER, lw=2.0, label="closed loop: current reading")
+    ax.axhline(a_step_g, color=GNC_RED, ls="--", lw=1); ax.set_xlabel("time [ms]")
+    ax.set_ylabel("indicated acceleration [g]"); _gnc_title(ax, "What each design reports")
+    ax.legend(fontsize=8); _gnc_style(ax)
+    ax = axs[2]
+    gs = np.linspace(0.5, 15, 16); eo, ec = [], []
+    for gg in gs:
+        _, _, ao = _accel_sim(gg, False, T=0.06, dt=5e-6); _, _, ac = _accel_sim(gg, True, T=0.03)
+        eo.append(abs(ao[-1] - gg)/gg*1e6); ec.append(max(abs(ac[-1] - gg)/gg*1e6, 1e-3))
+    ax.plot(gs, eo, "o-", color=GNC_STEEL, ms=4, label="open loop")
+    ax.plot(gs, ec, "s-", color=GNC_AMBER, ms=4, label="closed loop")
+    ax.set_xlabel("input acceleration [g]"); ax.set_ylabel("scale-factor error [ppm]")
+    ax.set_yscale("log"); _gnc_title(ax, "|Nonlinearity error| vs input")
+    ax.legend(fontsize=8); _gnc_style(ax)
+    plt.tight_layout(); plt.show()
+    print(f"Spring nonlinearity model: k(x) = k0*(1 + 0.002*(x/x10g)^2).  At {a_step_g:.0f} g the open-loop "
+          f"mass moves {Xo[-1]*1e6:.2f} um,")
+    print(f"the closed-loop mass only {abs(Xc[-1])*1e9:.2f} nm -> the spring's nonlinearity is never exercised.")
+
+
+def accel_schematic():
+    """Pendulous force-rebalance (Q-flex type) accelerometer, schematic cross-section."""
+    fig, ax = plt.subplots(figsize=(10.5, 4.3))
+    ax.set_xlim(0, 11); ax.set_ylim(0, 5); ax.axis("off"); ax.set_aspect("equal")
+    # case
+    ax.add_patch(plt.Rectangle((0.5, 0.5), 6.0, 4.0, facecolor="#F0F4F8", edgecolor=GNC_STEEL, lw=1.5))
+    # magnets / torquer coils
+    for y in (3.55, 0.85):
+        ax.add_patch(plt.Rectangle((2.2, y), 3.6, 0.55, facecolor=GNC_STEEL, edgecolor="none"))
+    ax.text(4.0, 4.27, "permanent magnet + torquer coil", ha="center", fontsize=8, color=GNC_NAVY)
+    ax.text(4.0, 0.62, "permanent magnet + torquer coil", ha="center", fontsize=8, color=GNC_NAVY)
+    # flexure + proof mass (pendulum)
+    ax.add_patch(plt.Rectangle((0.9, 2.42), 1.3, 0.16, facecolor=GNC_AMBER, edgecolor="none"))
+    ax.text(1.55, 2.0, "quartz flexure\n(hinge)", ha="center", fontsize=8, color="#8D6E00")
+    ax.add_patch(plt.Rectangle((2.2, 2.1), 3.6, 0.8, facecolor=GNC_NAVY, edgecolor="none"))
+    ax.text(4.0, 2.5, "proof mass (pendulum)", ha="center", va="center", color="white", fontsize=9,
+            fontweight="bold")
+    for y in (2.95, 2.0):
+        ax.plot([2.4, 5.6], [y, y], color=GNC_RED, lw=2.4)
+    ax.text(5.9, 2.35, "capacitive\npick-off", fontsize=7.5, color=GNC_RED, va="center")
+    ax.annotate("", xy=(4.0, 1.45), xytext=(4.0, 2.05),
+                arrowprops=dict(arrowstyle="-|>", color=GNC_RED, lw=1.6))
+    ax.text(4.25, 1.6, "input axis a", fontsize=8, color=GNC_RED)
+    # loop
+    bx = 7.3
+    for i, (t, s) in enumerate([("Pick-off amp", "detects x"), ("Servo (PID)", "drives x -> 0"),
+                                ("Sense resistor", "i  ->  a = Ks * i")]):
+        y = 3.6 - i*1.3
+        ax.add_patch(plt.Rectangle((bx, y), 3.2, 0.9, facecolor=GNC_NAVY if i < 2 else GNC_AMBER, edgecolor="none"))
+        ax.text(bx+1.6, y+0.58, t, ha="center", color="white" if i < 2 else GNC_NAVY, fontsize=9.5,
+                fontweight="bold")
+        ax.text(bx+1.6, y+0.24, s, ha="center", color="#D9E2EC" if i < 2 else GNC_NAVY, fontsize=8)
+        if i < 2:
+            ax.annotate("", xy=(bx+1.6, y-0.4), xytext=(bx+1.6, y),
+                        arrowprops=dict(arrowstyle="-|>", color=GNC_AMBER, lw=1.6))
+    ax.annotate("", xy=(bx, 4.05), xytext=(5.85, 2.95),
+                arrowprops=dict(arrowstyle="-|>", color=GNC_RED, lw=1.3, connectionstyle="arc3,rad=-0.2"))
+    ax.annotate("", xy=(5.8, 1.1), xytext=(bx, 1.45),
+                arrowprops=dict(arrowstyle="-|>", color=GNC_AMBER, lw=1.6, connectionstyle="arc3,rad=0.2"))
+    ax.text(6.55, 0.7, "rebalance current i", fontsize=8, color="#8D6E00")
+    _gnc_title(ax, "Pendulous force-rebalance accelerometer (Q-flex type) - schematic", loc="left",
+           fontsize=12)
+    plt.show()
+
+
+# -----------------------------------------------------------------------------
+# 2-C  Dynamically tuned gyro: the tuning condition
+# -----------------------------------------------------------------------------
+def dtg_tuning(K_flex=0.05, J_g=2.0e-7, theta_mrad=0.1, H=2.0e-3):
+    """K_eff = K_flex - J_g * N^2   ->   zero at N_tuned = sqrt(K_flex / J_g)."""
+    N = np.linspace(0, 1.6*np.sqrt(K_flex/J_g), 400)
+    K_eff = K_flex - J_g*N**2
+    Nt = np.sqrt(K_flex/J_g)
+    drift = np.abs(K_eff)*theta_mrad*1e-3/H*180/np.pi*3600          # deg/h
+    fig, axs = plt.subplots(1, 2, figsize=(12, 3.6))
+    ax = axs[0]
+    ax.plot(N*60/(2*np.pi), K_eff, color=GNC_NAVY, lw=2)
+    ax.axhline(0, color=GNC_MUTED, lw=0.8); ax.axvline(Nt*60/(2*np.pi), color=GNC_AMBER, ls="--")
+    ax.text(Nt*60/(2*np.pi)*1.02, K_flex*0.6, f"tuned speed\n{Nt*60/(2*np.pi):,.0f} rpm", color="#8D6E00",
+            fontsize=9)
+    ax.set_xlabel("rotor spin speed N [rpm]"); ax.set_ylabel("effective spring K_eff [N m/rad]")
+    _gnc_title(ax, "Gimbal 'negative spring' cancels the flexure"); _gnc_style(ax)
+    ax = axs[1]
+    ax.semilogy(N*60/(2*np.pi), np.maximum(drift, 1e-4), color=GNC_RED, lw=2)
+    ax.axvline(Nt*60/(2*np.pi), color=GNC_AMBER, ls="--")
+    ax.set_xlabel("rotor spin speed N [rpm]"); ax.set_ylabel("spring-induced drift [deg/h]")
+    _gnc_title(ax, f"Drift from residual stiffness (tilt {theta_mrad} mrad)"); _gnc_style(ax)
+    plt.tight_layout(); plt.show()
+    print("At the tuned speed the rotor behaves as if FREE (no restoring torque) -> pure gyroscopic rigidity.")
+    print("A 0.1 % speed error leaves 0.2 % of K_flex -> spin-motor speed control is part of the gyro accuracy.")
+
+
+# -----------------------------------------------------------------------------
+# 2-D  Ring-laser gyro: lock-in and dither  (normalised Adler equation)
+# -----------------------------------------------------------------------------
+def _rlg_mean_rate(w, dither_amp, nu=0.37, cycles=60, dt=0.02, rand_phase=False, seed=0):
+    """Mean of dpsi/dtau for dpsi/dtau = w + a*nu*cos(nu tau) - sin(psi), vectorised over w."""
+    rng = np.random.default_rng(seed)
+    T = cycles*2*np.pi/nu; n = int(T/dt)
+    psi = np.zeros_like(w); tau = 0.0
+    ph = rng.uniform(0, 2*np.pi) if rand_phase else 0.0
+    for k in range(n):
+        d = dither_amp*nu*np.cos(nu*tau + ph)
+        f1 = w + d - np.sin(psi)
+        p2 = psi + 0.5*dt*f1; d2 = dither_amp*nu*np.cos(nu*(tau+0.5*dt) + ph)
+        f2 = w + d2 - np.sin(p2)
+        psi = psi + dt*f2; tau += dt
+    return psi/T
+
+def rlg_lockin(dither_amp=6.0):
+    w = np.linspace(-3, 3, 241)
+    no_d = np.sign(w)*np.sqrt(np.clip(w**2 - 1, 0, None))
+    with_d = _rlg_mean_rate(w, dither_amp)
+    fig, axs = plt.subplots(1, 2, figsize=(12.5, 4))
+    ax = axs[0]
+    ax.plot(w, w, color=GNC_MUTED, ls=":", lw=1.2, label="ideal")
+    ax.plot(w, no_d, color=GNC_RED, lw=2.2, label="no dither (lock-in)")
+    ax.plot(w, with_d, color=GNC_AMBER, lw=1.6, label=f"sinusoidal dither (amp {dither_amp:g})")
+    ax.axvspan(-1, 1, color="#FDECEA", zorder=0); ax.text(0, 2.4, "dead band\n|Omega| < Omega_L",
+                                                          ha="center", fontsize=8.5, color=GNC_RED)
+    ax.set_xlabel("input rate  Omega / Omega_L"); ax.set_ylabel("beat frequency (normalised)")
+    _gnc_title(ax, "Lock-in: backscatter couples the two beams"); ax.legend(fontsize=8); _gnc_style(ax)
+    ax = axs[1]
+    ax.plot(w, with_d - w, color=GNC_AMBER, lw=1.6, label="sinusoidal dither")
+    ax.plot(w, no_d - w, color=GNC_RED, lw=1.2, alpha=0.5, label="no dither")
+    ax.axhline(0, color=GNC_MUTED, lw=0.8)
+    ax.set_ylim(-1.2, 1.2); ax.set_xlabel("input rate  Omega / Omega_L")
+    ax.set_ylabel("output error (normalised)")
+    _gnc_title(ax, "Residual 'dynamic lock-in' steps"); ax.legend(fontsize=8); _gnc_style(ax)
+    plt.tight_layout(); plt.show()
+    print("Model: d(psi)/dt = Omega + dither(t) - Omega_L*sin(psi)   (Adler equation, normalised by Omega_L)")
+    print("Mechanical dither keeps the beams OUT of the dead band most of the time; the remaining steps")
+    print("at multiples of the dither frequency are smeared out in real RLGs by randomising the dither amplitude.")
+
+
+# -----------------------------------------------------------------------------
+# 2-E  Fibre-optic gyro: why bias modulation, and coil sizing
+# -----------------------------------------------------------------------------
+def fog_principle(L_m=1000.0, D_m=0.10, lam_nm=1550.0):
+    phi = np.linspace(-np.pi, np.pi, 600)
+    fig, axs = plt.subplots(1, 3, figsize=(13.5, 3.7))
+    ax = axs[0]
+    ax.plot(phi, 0.5*(1 + np.cos(phi)), color=GNC_NAVY, lw=2, label="raw detector  (1+cos phi)/2")
+    ax.plot(phi, 0.58*np.sin(phi), color=GNC_AMBER, lw=2, label="demodulated with +/-pi/2 bias mod.")
+    ax.axvline(0, color=GNC_MUTED, lw=0.8)
+    ax.annotate("zero slope at rest\n-> no sign, no sensitivity", xy=(0, 1.0), xytext=(0.5, 1.12),
+                fontsize=8, color=GNC_NAVY, arrowprops=dict(arrowstyle="->", color=GNC_NAVY))
+    ax.set_xlabel("Sagnac phase phi_s [rad]"); ax.set_ylabel("signal (normalised)")
+    _gnc_title(ax, "Why FOGs need phase modulation"); ax.set_ylim(-0.75, 1.35); ax.legend(fontsize=7, loc="upper left", ncol=1, framealpha=0.9); _gnc_style(ax)
+
+    lam = lam_nm*1e-9
+    k = 2*np.pi*L_m*D_m/(lam*GNC_C)                     # rad of phase per rad/s
+    ax = axs[1]
+    Ls = np.logspace(1, 4, 100)
+    for D, c in [(0.03, GNC_LIGHT), (0.06, GNC_STEEL), (0.10, GNC_NAVY), (0.20, GNC_AMBER)]:
+        ax.loglog(Ls, 2*np.pi*Ls*D/(lam*GNC_C)*GNC_OME, color=c, lw=1.8, label=f"D = {D*100:.0f} cm")
+    ax.axhline(1e-7, color=GNC_RED, ls="--", lw=1); ax.text(12, 1.3e-7, "~ detectable phase (1e-7 rad)",
+                                                         fontsize=8, color=GNC_RED)
+    ax.plot(L_m, k*GNC_OME, "o", color=GNC_RED, ms=7)
+    ax.set_xlabel("fibre length L [m]"); ax.set_ylabel("phase at Earth rate (15 deg/h) [rad]")
+    _gnc_title(ax, "Sensitivity grows with L x D"); ax.legend(fontsize=7.5); _gnc_style(ax)
+
+    ax = axs[2]
+    rates_dph = np.logspace(-3, 2, 100)
+    ax.loglog(rates_dph, k*rates_dph*np.pi/180/3600, color=GNC_NAVY, lw=2)
+    for r, lab in [(0.01, "nav-grade bias\n0.01 deg/h"), (15.04, "Earth rate")]:
+        ax.plot(r, k*r*np.pi/180/3600, "o", color=GNC_AMBER, ms=6)
+        ax.text(r*1.3, k*r*np.pi/180/3600*0.4, lab, fontsize=8, color=GNC_NAVY)
+    ax.set_xlabel("rotation rate [deg/h]"); ax.set_ylabel("Sagnac phase [rad]")
+    _gnc_title(ax, f"Your coil: L={L_m:,.0f} m, D={D_m*100:.0f} cm"); _gnc_style(ax)
+    plt.tight_layout(); plt.show()
+    print(f"Scale factor = 2*pi*L*D/(lambda*c) = {k:.3f} rad per (rad/s).")
+    print(f"A navigation-grade bias of 0.01 deg/h corresponds to only {k*0.01*np.pi/180/3600:.1e} rad of phase"
+          " -> the whole FOG is an exercise in measuring 1e-7 rad reliably.")
+
+
+# -----------------------------------------------------------------------------
+# 2-F  Hemispherical resonator gyro: standing-wave precession (Bryan effect)
+# -----------------------------------------------------------------------------
+def hrg_bryan(case_rot_deg=90.0, k_bryan=0.3):
+    th = np.linspace(0, 2*np.pi, 400)
+    fig, axs = plt.subplots(1, 3, figsize=(12.5, 4.3), subplot_kw=dict(projection="polar"))
+    cases = [0.0, case_rot_deg/2, case_rot_deg]
+    for ax, Th in zip(axs, cases):
+        wave = (1 - k_bryan)*np.radians(Th)              # pattern angle in inertial space
+        r = 1 + 0.18*np.cos(2*(th - wave))
+        ax.plot(th, np.ones_like(th), color="#D9E2EC", lw=6)
+        ax.plot(th, r, color=GNC_NAVY, lw=2)
+        ax.plot(th, 1 - 0.18*np.cos(2*(th - wave)), color=GNC_STEEL, lw=1.2, ls="--")
+        ax.plot([np.radians(Th)]*2, [0, 1.25], color=GNC_AMBER, lw=2.5)
+        ax.plot([wave]*2, [0, 1.25], color=GNC_RED, lw=1.8, ls=":")
+        ax.set_ylim(0, 1.3); ax.set_yticklabels([]); ax.set_xticks(np.radians([0, 90, 180, 270]))
+        ax.set_title(f"case rotated {Th:.0f} deg\nwave antinode at {np.degrees(wave):.1f} deg",
+                     fontsize=9.5, color=GNC_NAVY, pad=12)
+    fig.suptitle("HRG: the n=2 standing wave lags the case rotation  (amber = case mark, red = antinode)",
+                 color=GNC_NAVY, fontweight="bold", fontsize=11)
+    plt.tight_layout(); plt.show()
+    print(f"Pattern angle relative to the case = -k*Theta, k ~ {k_bryan} for a hemisphere (0.4 for a thin ring).")
+    print("Reading the pattern angle gives the ROTATION ANGLE directly ('whole-angle' mode) - no rate integration,")
+    print("no moving parts, no wear: the reason HRGs fly on long-life spacecraft.")
+
+
+# -----------------------------------------------------------------------------
+# 2-G  MEMS Coriolis gyro: mode matching trade-off
+# -----------------------------------------------------------------------------
+def mems_modes(f_drive=20e3, Q=5000.0, split_hz=100.0):
+    wd = 2*np.pi*f_drive
+    def gain(fs, Q):
+        ws = 2*np.pi*fs
+        return 1/np.sqrt((ws**2 - wd**2)**2 + (ws*wd/Q)**2)
+    splits = np.linspace(-400, 400, 801)
+    fig, axs = plt.subplots(1, 2, figsize=(12.5, 3.8))
+    ax = axs[0]
+    for q, c in [(500, GNC_LIGHT), (5000, GNC_STEEL), (50000, GNC_NAVY)]:
+        g = np.array([gain(f_drive + s, q) for s in splits]); ax.semilogy(splits, g/g.max(), color=c,
+                                                                            lw=1.8, label=f"Q = {q:,}")
+    ax.axvline(split_hz, color=GNC_AMBER, ls="--", lw=1.2)
+    ax.set_xlabel("sense-mode frequency minus drive frequency [Hz]")
+    ax.set_ylabel("Coriolis -> sense gain (normalised)")
+    _gnc_title(ax, "Mode matching: gain vs frequency split"); ax.legend(fontsize=8); _gnc_style(ax)
+    ax = axs[1]
+    s = np.abs(splits[splits > 0.5]); gq = np.array([gain(f_drive + x, Q) for x in s])
+    g0_ = gain(f_drive, Q)
+    bw = np.where(s > f_drive/(2*Q), s, f_drive/(2*Q))
+    ax.loglog(s, gq/g0_, color=GNC_NAVY, lw=2, label="relative sensitivity")
+    ax.loglog(s, bw, color=GNC_AMBER, lw=2, label="usable bandwidth ~ max(split, f/2Q) [Hz]")
+    ax.axvline(split_hz, color=GNC_RED, ls="--", lw=1)
+    ax.set_xlabel("|frequency split| [Hz]"); ax.set_ylabel("relative sensitivity  |  bandwidth [Hz]")
+    _gnc_title(ax, f"Sensitivity <-> bandwidth (Q = {Q:,.0f})"); ax.legend(fontsize=8); _gnc_style(ax)
+    plt.tight_layout(); plt.show()
+    gs = gain(f_drive + split_hz, Q)/g0_
+    print(f"With a {split_hz:.0f} Hz split the sensitivity is {gs*100:.2f} % of the matched value, "
+          f"but the response is fast (~{max(split_hz, f_drive/(2*Q)):.0f} Hz bandwidth).")
+    print("Matched + high Q = sensitive but slow and temperature-fragile -> why MEMS gyros sit in the tactical/"
+          "consumer grade and why mode-matching electronics are the frontier.")
+
+
+# -----------------------------------------------------------------------------
+# 2-H  Technology map: bias stability vs angle random walk
+# -----------------------------------------------------------------------------
+def gyro_tech_map():
+    from matplotlib.patches import Ellipse
+    # (bias low, bias high, ARW low, ARW high)  - illustrative orders of magnitude
+    tech = {
+        "Consumer MEMS":   (5, 100, 0.2, 2, GNC_LIGHT),
+        "Tactical MEMS":   (0.5, 10, 0.05, 0.5, "#9FB3C8"),
+        "DTG":             (0.01, 1, 0.005, 0.1, GNC_MUTED),
+        "RLG":             (0.0008, 0.5, 0.0005, 0.05, GNC_STEEL),
+        "FOG":             (0.0003, 1, 0.0001, 0.05, GNC_NAVY),
+        "HRG":             (0.0001, 0.01, 0.00005, 0.002, GNC_AMBER),
+        "ESG":             (0.00003, 0.0005, 0.00002, 0.0003, GNC_RED),
+    }
+    fig, ax = plt.subplots(figsize=(9.5, 5.6))
+    for name, (b0, b1, a0, a1, c) in tech.items():
+        cx, cy = np.sqrt(b0*b1), np.sqrt(a0*a1)
+        e = Ellipse((np.log10(cx), np.log10(cy)), np.log10(b1/b0), np.log10(a1/a0),
+                    facecolor=c, alpha=0.30, edgecolor=c, lw=1.5)
+        ax.add_patch(e)
+        ax.text(np.log10(cx), np.log10(cy), name, ha="center", va="center", fontsize=9,
+                fontweight="bold", color=GNC_NAVY)
+    for b, lab in [(0.005, "strategic"), (0.01, "navigation"), (1, "tactical")]:
+        ax.axvline(np.log10(b), color=GNC_MUTED, ls=":", lw=1)
+        ax.text(np.log10(b), 0.65, lab, rotation=90, fontsize=8, color=GNC_MUTED, ha="right", va="top")
+    ax.set_xlim(-5, 2.3); ax.set_ylim(-5, 0.8)
+    ax.set_xticks(range(-5, 3)); ax.set_xticklabels([f"1e{i}" for i in range(-5, 3)])
+    ax.set_yticks(range(-5, 1)); ax.set_yticklabels([f"1e{i}" for i in range(-5, 1)])
+    ax.set_xlabel("bias instability [deg/h]   (log)"); ax.set_ylabel("angle random walk [deg/sqrt(h)]   (log)")
+    _gnc_title(ax, "Gyro technology map (illustrative orders of magnitude)", loc="left", fontsize=12)
+    _gnc_style(ax); plt.show()
+    print("Lower-left = better. Launch vehicles live around the navigation-grade line (RLG/FOG);")
+    print("MEMS is approaching it from the upper right, HRG/ESG hold the strategic corner.")
+
+
+# -----------------------------------------------------------------------------
+# 2-I  Coning and the two-sample attitude algorithm
+# -----------------------------------------------------------------------------
+def _gnc_qmul(a, b):
+    w1, x1, y1, z1 = a; w2, x2, y2, z2 = b
+    return np.array([w1*w2 - x1*x2 - y1*y2 - z1*z2, w1*x2 + x1*w2 + y1*z2 - z1*y2,
+                     w1*y2 - x1*z2 + y1*w2 + z1*x2, w1*z2 + x1*y2 - y1*x2 + z1*w2])
+
+def _gnc_rv2q(v):
+    a = np.linalg.norm(v)
+    if a < 1e-15:
+        return np.array([1.0, 0.5*v[0], 0.5*v[1], 0.5*v[2]])
+    s = np.sin(a/2)/a
+    return np.array([np.cos(a/2), v[0]*s, v[1]*s, v[2]*s])
+
+def _coning_run(f_cone, half_deg, f_upd, T=30.0, sub=8):
+    W = 2*np.pi*f_cone; a = np.radians(half_deg)/2; s = np.sin(a)
+    def q_true(t):
+        return np.array([np.cos(a), 0.0, s*np.cos(W*t), s*np.sin(W*t)])
+    def w_body(t):
+        q = q_true(t); qd = np.array([0, 0, -s*W*np.sin(W*t), s*W*np.cos(W*t)])
+        qc = q*np.array([1, -1, -1, -1]); return 2*_gnc_qmul(qc, qd)[1:]
+    h = 1/f_upd; n = int(T/h)
+    # gyro increments: half-interval angle increments (for 2-sample) via fine Simpson integration
+    def incr(t0, t1):
+        tt = np.linspace(t0, t1, sub + 1); ww = np.array([w_body(x) for x in tt])
+        return np.trapezoid(ww, tt, axis=0) if hasattr(np, "trapezoid") else np.trapz(ww, tt, axis=0)
+    q1 = q_true(0.0); q2 = q_true(0.0); err1, err2, tt = [], [], []
+    for k in range(n):
+        t0 = k*h; d1 = incr(t0, t0 + h/2); d2 = incr(t0 + h/2, t0 + h)
+        q1 = _gnc_qmul(q1, _gnc_rv2q(d1 + d2))
+        q2 = _gnc_qmul(q2, _gnc_rv2q(d1 + d2 + (2/3)*np.cross(d1, d2)))
+        if k % max(1, n//300) == 0 or k == n - 1:
+            qt = q_true(t0 + h); qtc = qt*np.array([1, -1, -1, -1])
+            e1 = 2*_gnc_qmul(qtc, q1)[1:]; e2 = 2*_gnc_qmul(qtc, q2)[1:]
+            err1.append(np.degrees(np.linalg.norm(e1))*3600); err2.append(np.degrees(np.linalg.norm(e2))*3600)
+            tt.append(t0 + h)
+    return np.array(tt), np.array(err1), np.array(err2)
+
+def coning(f_cone=10.0, half_deg=0.5, f_upd=100.0):
+    t, e1, e2 = _coning_run(f_cone, half_deg, f_upd)
+    fig, axs = plt.subplots(1, 2, figsize=(12.5, 3.8))
+    ax = axs[0]
+    ax.plot(t, e1, color=GNC_RED, lw=2, label="single-sample update")
+    ax.plot(t, e2, color=GNC_AMBER, lw=2, label="two-sample (coning-compensated)")
+    ax.set_xlabel("time [s]"); ax.set_ylabel("attitude error [arcsec]")
+    _gnc_title(ax, f"Coning {f_cone:g} Hz, half-angle {half_deg:g} deg, update {f_upd:g} Hz")
+    ax.legend(fontsize=8); _gnc_style(ax)
+    ax = axs[1]
+    rates = [50, 100, 200, 400, 800]; d1, d2 = [], []
+    for fu in rates:
+        tt, a1, a2 = _coning_run(f_cone, half_deg, fu, T=5.0, sub=6)
+        d1.append(a1[-1]/5); d2.append(max(a2[-1], 1e-6)/5)
+    ax.loglog(rates, np.array(d1), "o-", color=GNC_RED, label="single-sample")
+    ax.loglog(rates, np.array(d2), "s-", color=GNC_AMBER, label="two-sample")
+    ax.set_xlabel("attitude update rate [Hz]"); ax.set_ylabel("apparent drift [arcsec/s]")
+    _gnc_title(ax, "Algorithm drift vs update rate"); ax.legend(fontsize=8); _gnc_style(ax)
+    plt.tight_layout(); plt.show()
+    print("Coning = two axes oscillating 90 deg out of phase. Each axis averages to zero, yet the body")
+    print("rotates steadily about the third axis (non-commutativity). An algorithm that just adds angle")
+    print("increments misses this and DRIFTS. The 2/3*(d1 x d2) cross-product term recovers it.")
+
+
+# -----------------------------------------------------------------------------
+# 2-J  Schuler loop and the unstable vertical channel
+# -----------------------------------------------------------------------------
+def schuler(acc_bias_ug=50.0):
+    b = acc_bias_ug*1e-6*GNC_G0
+    ws = np.sqrt(GNC_G0/GNC_RE); wv = np.sqrt(2*GNC_G0/GNC_RE)
+    t = np.linspace(0, 120*60, 1200)
+    fig, axs = plt.subplots(1, 2, figsize=(12.5, 3.9))
+    ax = axs[0]
+    ax.plot(t/60, 0.5*b*t**2/1e3, color=GNC_MUTED, ls="--", lw=1.4, label="naive  1/2 b t^2")
+    ax.plot(t/60, b/ws**2*(1 - np.cos(ws*t))/1e3, color=GNC_NAVY, lw=2, label="with gravity feedback (Schuler)")
+    ax.axvline(84.4, color=GNC_AMBER, ls=":"); ax.text(85.5, ax.get_ylim()[1]*0.05 + 0.1, "84.4 min", fontsize=8,
+                                                    color="#8D6E00")
+    ax.axvspan(0, 10, color="#FFF6E0"); ax.text(1, 0.9*ax.get_ylim()[1], "launch\n< 10 min", fontsize=8,
+                                               color="#8D6E00", va="top")
+    ax.set_ylim(0, None)
+    ax.set_xlabel("time [min]"); ax.set_ylabel("horizontal error [km]")
+    _gnc_title(ax, f"Horizontal channel: bounded (accel bias {acc_bias_ug:g} ug)"); ax.legend(fontsize=8); _gnc_style(ax)
+    ax = axs[1]
+    tv = np.linspace(0, 20*60, 600)
+    ax.plot(tv/60, 0.5*b*tv**2, color=GNC_MUTED, ls="--", lw=1.4, label="naive  1/2 b t^2")
+    ax.plot(tv/60, b/wv**2*(np.cosh(wv*tv) - 1), color=GNC_RED, lw=2, label="with gravity feedback")
+    ax.set_xlabel("time [min]"); ax.set_ylabel("altitude error [m]")
+    _gnc_title(ax, f"Vertical channel: diverges (time const. {1/wv:.0f} s)"); ax.legend(fontsize=8); _gnc_style(ax)
+    plt.tight_layout(); plt.show()
+    print(f"Schuler period 2*pi*sqrt(R/g) = {2*np.pi/ws/60:.1f} min: a horizontal tilt error makes gravity pull")
+    print("the solution BACK -> bounded oscillation. Vertically, an altitude error lowers the modelled gravity,")
+    print(f"which pushes the solution further away -> exponential growth with time constant sqrt(R/2g) = {1/wv:.0f} s.")
+    print(f"At 10 min: vertical error is {b/wv**2*(np.cosh(wv*600)-1)/(0.5*b*600**2):.2f}x the naive value.")
+
+
+# -----------------------------------------------------------------------------
+# 2-K  Redundant skewed sensors and fault detection (parity)
+# -----------------------------------------------------------------------------
+def _dodeca_axes(n=6):
+    if n == 3:
+        return np.eye(3)
+    if n == 4:
+        v = np.array([[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]], float)
+        return v/np.linalg.norm(v, axis=1)[:, None]
+    phi = (1 + np.sqrt(5))/2
+    v = np.array([[0, 1, phi], [0, -1, phi], [1, phi, 0], [-1, phi, 0], [phi, 0, 1], [phi, 0, -1]], float)
+    return v/np.linalg.norm(v, axis=1)[:, None]
+
+def redundancy(fault_dph=5.0, sigma_dph=0.05):
+    rows = []
+    for n, det, iso in [(3, "no", "no"), (4, "1 fault", "no"), (5, "2 faults", "1 fault"),
+                        (6, "2 faults", "1 fault (fail-op / fail-safe)")]:
+        H = _dodeca_axes(n) if n != 5 else _dodeca_axes(6)[:5]
+        P = np.linalg.inv(H.T @ H)
+        rows.append([f"{n} sensors", f"{np.sqrt(np.trace(P)/3):.3f} sigma", det, iso])
+    gnc_show(pd.DataFrame(rows, columns=["Configuration", "3-axis rate noise", "Detect", "Isolate"]),
+         "== Skewed redundant gyro configurations (sigma = single-sensor noise) ==")
+    H = _dodeca_axes(6); rng = np.random.default_rng(3)
+    # parity matrix: rows span the left null space of H
+    U, S, Vt = np.linalg.svd(H); Vp = U[:, 3:].T
+    t = np.arange(0, 20, 0.01); w_true = np.c_[0.2*np.sin(0.5*t), 0.1*np.cos(0.3*t), 0.05*np.ones_like(t)]
+    m = (H @ w_true.T).T + rng.normal(0, sigma_dph, (len(t), 6))
+    m[t >= 8, 2] += fault_dph
+    p = (Vp @ m.T).T; pmag = np.linalg.norm(p, axis=1)
+    thr = 4*sigma_dph*np.sqrt(3)
+    fig = plt.figure(figsize=(12.5, 4))
+    ax = fig.add_subplot(1, 2, 1, projection="3d")
+    for i, a in enumerate(H):
+        ax.quiver(0, 0, 0, *a, color=GNC_RED if i == 2 else GNC_NAVY, lw=2, arrow_length_ratio=0.12)
+        ax.text(*(a*1.12), f"G{i+1}", fontsize=8, color=GNC_RED if i == 2 else GNC_NAVY)
+    ax.set_xlim(-1, 1); ax.set_ylim(-1, 1); ax.set_zlim(-0.2, 1.1)
+    ax.set_title("6 gyros on dodecahedron face normals", color=GNC_NAVY, fontweight="bold", fontsize=10)
+    ax2 = fig.add_subplot(1, 2, 2)
+    ax2.plot(t, pmag, color=GNC_STEEL, lw=1); ax2.axhline(thr, color=GNC_RED, ls="--", lw=1.2)
+    ax2.axvline(8, color=GNC_AMBER, ls=":"); ax2.text(8.2, thr*1.3, f"G3 fails (+{fault_dph:g} deg/h)",
+                                                  fontsize=8.5, color="#8D6E00")
+    ax2.set_xlabel("time [s]"); ax2.set_ylabel("|parity vector| [deg/h]")
+    _gnc_title(ax2, "Parity check: true motion cancels, faults remain"); _gnc_style(ax2)
+    plt.tight_layout(); plt.show()
+    k = np.argmax(np.abs(Vp.T @ p[t >= 8].mean(axis=0)) / np.linalg.norm(Vp, axis=0))
+    print(f"Isolation (largest projection of the mean parity vector onto each sensor's parity direction): G{k+1}")
+    print("Noise falls as sqrt(3/n); with 6 skewed sensors any single fault is isolated and a second is detected.")
+
+
+# -----------------------------------------------------------------------------
+# 2-L  Euler-angle singularity (why gimbal lock matters)
+# -----------------------------------------------------------------------------
+def euler_singularity():
+    th = np.linspace(0, 89.5, 400)
+    rate = 1/np.cos(np.radians(th))
+    fig, ax = plt.subplots(figsize=(8.5, 3.6))
+    ax.semilogy(th, rate, color=GNC_NAVY, lw=2)
+    ax.axvline(45, color=GNC_AMBER, ls="--"); ax.text(46, 2.0, "Saturn V middle-gimbal\nlimit +/-45 deg",
+                                                  fontsize=8.5, color="#8D6E00")
+    ax.axvspan(80, 90, color="#FDECEA"); ax.text(80.5, 30, "gimbal\nlock", fontsize=9, color=GNC_RED)
+    ax.set_xlabel("2nd Euler angle (pitch/yaw) [deg]")
+    ax.set_ylabel("Euler-rate / body-rate  = 1/cos(theta)")
+    _gnc_title(ax, "Euler-angle kinematics blow up at 90 deg - quaternions do not"); _gnc_style(ax)
+    plt.show()
+    print("Euler-rate = body-rate / cos(theta): at 80 deg already 5.8x, at 89 deg 57x -> numerical blow-up.")
+
+
+# -----------------------------------------------------------------------------
+# 2-M  Error-budget widget: which sensor error dominates at the end of flight?
+# -----------------------------------------------------------------------------
+def nav_error_budget(t_flight_s=600.0, gyro_bias_dph=0.01, arw_dpsh=0.002, acc_bias_ug=50.0,
+                     sf_ppm=50.0, align_az_deg=0.025, mean_acc_g=1.5):
+    t = np.linspace(0, t_flight_s, 400)
+    db = np.radians(gyro_bias_dph)/3600
+    arw = np.radians(arw_dpsh)/60
+    comps = {
+        "gyro bias  (f*db*t^3/6)":         mean_acc_g*GNC_G0*db*t**3/6,
+        "angle random walk":               mean_acc_g*GNC_G0*arw*np.sqrt(t)*t**2/3,
+        "accel bias  (b*t^2/2)":           acc_bias_ug*1e-6*GNC_G0*t**2/2,
+        "accel scale factor":              sf_ppm*1e-6*mean_acc_g*GNC_G0*t**2/2,
+        "initial azimuth misalignment":    np.radians(align_az_deg)*mean_acc_g*GNC_G0*t**2/2,
+    }
+    cols = [GNC_NAVY, GNC_LIGHT, GNC_STEEL, GNC_MUTED, GNC_AMBER]
+    fig, axs = plt.subplots(1, 2, figsize=(12.5, 3.9))
+    ax = axs[0]
+    tot = np.sqrt(sum(v**2 for v in comps.values()))
+    for (k, v), c in zip(comps.items(), cols):
+        ax.plot(t/60, v/1e3, color=c, lw=1.8, label=k)
+    ax.plot(t/60, tot/1e3, color=GNC_RED, lw=2.4, label="RSS total")
+    ax.set_xlabel("time [min]"); ax.set_ylabel("position error [km]")
+    _gnc_title(ax, "Error growth by source"); ax.legend(fontsize=7.5); _gnc_style(ax)
+    ax = axs[1]
+    fin = np.array([v[-1]**2 for v in comps.values()]); share = fin/fin.sum()*100
+    ax.barh(range(len(fin)), share, color=cols)
+    ax.set_yticks(range(len(fin))); ax.set_yticklabels([k.split("(")[0] for k in comps], fontsize=8.5)
+    for i, s in enumerate(share):
+        ax.text(s + 1, i, f"{s:.1f} %", va="center", fontsize=8.5)
+    ax.set_xlim(0, 115); ax.invert_yaxis(); ax.set_xlabel("share of final variance [%]")
+    _gnc_title(ax, f"At t = {t_flight_s:.0f} s : RSS = {tot[-1]/1e3:.2f} km"); _gnc_style(ax, grid="x")
+    plt.tight_layout(); plt.show()
+    print(f"Tilt errors rotate the measured specific force f (mean {mean_acc_g:g} g of thrust), not gravity:")
+    print("an attitude error eps creates a false acceleration eps x f.  With the defaults, the launch-pad azimuth")
+    print("alignment dominates - the reason Nuri's INGU carries a dedicated 0.025 deg (3 sigma) alignment spec.")
+
+
+# =============================================================================
+#  PART C - Interactive wrappers
+#    In Colab / Jupyter each call shows sliders.  If ipywidgets is missing, or the
+#    environment variable GNC_STATIC=1 is set (used when pre-rendering the notebook),
+#    the default figure is drawn instead.
+# =============================================================================
+import os as _gnc_os
+
+def _gnc_interactive(func, **controls):
+    defaults = {k: (v.value if hasattr(v, "value") else v) for k, v in controls.items()}
+    if _gnc_os.environ.get("GNC_STATIC") == "1":
+        func(**defaults)
+        print("\n[Interactive] Run this cell in Colab/Jupyter to get sliders for: " + ", ".join(controls))
+        return
+    try:
+        import ipywidgets as W
+        from IPython.display import display
+    except Exception:
+        func(**defaults); return
+    ui = W.interactive(func, {"manual": False}, **controls)
+    for c in ui.children[:-1]:
+        try:
+            c.continuous_update = False
+            c.style = {"description_width": "initial"}
+            c.layout = W.Layout(width="440px")
+        except Exception:
+            pass
+    display(ui)
+
+def _gnc_fs(v, lo, hi, step, desc, fmt=None):
+    import ipywidgets as W
+    kw = dict(value=v, min=lo, max=hi, step=step, description=desc)
+    if fmt: kw["readout_format"] = fmt
+    return W.FloatSlider(**kw)
+
+def _gnc_fls(v, lo, hi, desc):
+    import ipywidgets as W
+    return W.FloatLogSlider(value=v, min=lo, max=hi, base=10, description=desc, readout_format=".3g")
+
+def _gnc_safe(builder):
+    try:
+        return builder()
+    except Exception:
+        return None
+
+
+def widget_accel_servo():
+    _gnc_interactive(accel_servo, a_step_g=_gnc_safe(lambda: _gnc_fs(10, 1, 15, 1, "step input [g]")) or 10.0)
+
+def widget_dtg():
+    _gnc_interactive(dtg_tuning,
+                 K_flex=_gnc_safe(lambda: _gnc_fs(0.05, 0.01, 0.1, 0.005, "flexure K [N m/rad]")) or 0.05,
+                 theta_mrad=_gnc_safe(lambda: _gnc_fs(0.1, 0.01, 1.0, 0.01, "rotor tilt [mrad]")) or 0.1)
+
+def widget_rlg_lockin():
+    _gnc_interactive(rlg_lockin, dither_amp=_gnc_safe(lambda: _gnc_fs(6, 0, 15, 0.5, "dither amplitude (x Omega_L/nu)")) or 6.0)
+
+def widget_fog():
+    _gnc_interactive(fog_principle,
+                 L_m=_gnc_safe(lambda: _gnc_fs(1000, 50, 5000, 50, "fibre length L [m]")) or 1000.0,
+                 D_m=_gnc_safe(lambda: _gnc_fs(0.10, 0.02, 0.30, 0.01, "coil diameter D [m]")) or 0.10)
+
+def widget_hrg():
+    _gnc_interactive(hrg_bryan,
+                 case_rot_deg=_gnc_safe(lambda: _gnc_fs(90, 0, 180, 5, "case rotation [deg]")) or 90.0,
+                 k_bryan=_gnc_safe(lambda: _gnc_fs(0.3, 0.1, 0.5, 0.01, "Bryan factor k")) or 0.3)
+
+def widget_mems():
+    _gnc_interactive(mems_modes,
+                 Q=_gnc_safe(lambda: _gnc_fls(5000, 2, 5, "quality factor Q")) or 5000.0,
+                 split_hz=_gnc_safe(lambda: _gnc_fs(100, 1, 400, 1, "frequency split [Hz]")) or 100.0)
+
+def widget_coning():
+    _gnc_interactive(coning,
+                 f_cone=_gnc_safe(lambda: _gnc_fs(10, 1, 40, 1, "coning frequency [Hz]")) or 10.0,
+                 half_deg=_gnc_safe(lambda: _gnc_fs(0.5, 0.1, 2.0, 0.1, "half-angle [deg]")) or 0.5,
+                 f_upd=_gnc_safe(lambda: _gnc_fs(100, 50, 800, 50, "update rate [Hz]")) or 100.0)
+
+def widget_schuler():
+    _gnc_interactive(schuler, acc_bias_ug=_gnc_safe(lambda: _gnc_fs(50, 5, 500, 5, "accelerometer bias [ug]")) or 50.0)
+
+def widget_redundancy():
+    _gnc_interactive(redundancy, fault_dph=_gnc_safe(lambda: _gnc_fs(5, 0.5, 20, 0.5, "injected fault [deg/h]")) or 5.0)
+
+def widget_nav_budget():
+    _gnc_interactive(nav_error_budget,
+                 t_flight_s=_gnc_safe(lambda: _gnc_fs(600, 120, 1500, 30, "flight time [s]")) or 600.0,
+                 gyro_bias_dph=_gnc_safe(lambda: _gnc_fls(0.01, -3, 1, "gyro bias [deg/h]")) or 0.01,
+                 acc_bias_ug=_gnc_safe(lambda: _gnc_fls(50, 0, 3, "accel bias [ug]")) or 50.0,
+                 sf_ppm=_gnc_safe(lambda: _gnc_fls(50, 0, 3, "accel scale factor [ppm]")) or 50.0,
+                 align_az_deg=_gnc_safe(lambda: _gnc_fls(0.025, -3, 0, "azimuth alignment [deg]")) or 0.025)
+
+
+# ---- assignments as functions -------------------------------------------------
+def assignment_grade(T_coast=1200.0, dV_spec=2.0, N_SRC=5):
+    bias_single = dV_spec/(0.5*GNC_G0*T_coast**2)*3600*(180/np.pi)
+    bias_req = bias_single/np.sqrt(N_SRC)
+    grade = "Strategic" if bias_req < 0.005 else "Navigation" if bias_req < 0.05 else "Tactical"
+    print(f"[Assignment 1] Single-source assumption <~ {bias_single:.4f} deg/h -> with {int(N_SRC)}-source RSS "
+          f"allocation <~ {bias_req:.4f} deg/h  =>  {grade} grade")
+    print("        -> Is this grade MTCR-controlled? Is a domestic substitute available? Discuss in your report.")
+
+def assignment_closed_loop_value(disp_pct=2.4, m_pl=1500.0, Isp_u=325.0):
+    Vex_t, a0_t, dV_t = Isp_u*GNC_G0, 8.5, 2000.0
+    tgo_nom = (Vex_t/a0_t)*(1-np.exp(-dV_t/Vex_t))
+    s_ = disp_pct/100
+    worst = max(abs(-Vex_t*np.log(1-tgo_nom/(Vex_t/(a0_t*(1+s)))) - dV_t) for s in (-s_, s_))
+    dm = m_pl*(np.exp(worst/(Isp_u*GNC_G0))-1)
+    print(f"[Assignment 2] dV reserve needed by an open-loop design ~ {worst:.1f} m/s")
+    print(f"               On a {m_pl:,.0f} kg payload that is about {dm:,.1f} kg of extra propellant"
+          f"  <- what closed-loop guidance gives back")
+
+def widget_assignments():
+    import ipywidgets as W  # noqa
+    _gnc_interactive(assignment_grade,
+                 T_coast=_gnc_safe(lambda: _gnc_fs(1200, 300, 3000, 60, "inertial flight time [s]")) or 1200.0,
+                 dV_spec=_gnc_safe(lambda: _gnc_fs(2.0, 0.5, 10, 0.5, "injection dV spec 3sigma [m/s]")) or 2.0,
+                 N_SRC=_gnc_safe(lambda: W.IntSlider(value=5, min=1, max=10, description="error sources")) or 5)
+    _gnc_interactive(assignment_closed_loop_value,
+                 disp_pct=_gnc_safe(lambda: _gnc_fs(2.4, 0.5, 5, 0.1, "thrust dispersion 3sigma [%]")) or 2.4,
+                 m_pl=_gnc_safe(lambda: _gnc_fs(1500, 100, 5000, 100, "payload [kg]")) or 1500.0)
+    print("\n[Assignment 3] Use the slider of widget_steering() (section 3.6) at 120, 180 and 250 km and compare how the")
+    print("               propellant penalty of linear-sine vs linear-tangent guidance changes.")
+
+
+def widget_steering():
+    _gnc_interactive(ex3_4_steering, hc_km=_gnc_safe(lambda: _gnc_fs(180, 120, 250, 10, "target altitude [km]")) or 180.0)
+
+def widget_qalpha():
+    _gnc_interactive(ex3_3_qalpha, jet_ms=_gnc_safe(lambda: _gnc_fs(60, 10, 100, 5, "jet-stream peak wind [m/s]")) or 60.0)
