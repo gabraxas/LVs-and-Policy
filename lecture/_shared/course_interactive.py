@@ -5701,3 +5701,716 @@ def widget_steering():
 
 def widget_qalpha():
     _gnc_interactive(ex3_3_qalpha, jet_ms=_gnc_safe(lambda: _gnc_fs(60, 10, 100, 5, "jet-stream peak wind [m/s]")) or 60.0)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 6주차 위젯 함수  ──  하중 · 구조 · 탱크 재료 · 탱크 제작과 개발
+#   예제 발사체: 4주차 LV-B (지름 3.7 m, 전장 43.1 m, GLOW 249 t, 케로신/LOX 2단)
+#   이름 충돌 방지: 공개 함수 w6_*, 내부 도우미 _w6_* 접두어 사용
+#   정적 그림  : w6_thinness_ratio(), w6_tank_history_timeline(), w6_tank_process_flow()
+#   슬라이더   : w6_flight_loads_explorer, w6_section_loads_explorer, w6_statistical_loads_explorer,
+#               w6_cylinder_explorer, w6_material_compare_explorer, w6_isogrid_explorer,
+#               w6_reuse_fatigue_explorer
+#   환경변수 W6_STATIC=1 이면 슬라이더 대신 기본값 그림만 출력 (사전 렌더링·QA용)
+#   모든 수치는 개념 이해를 위한 교육용 근사치임 (설계 허용치로 사용 금지)
+# ══════════════════════════════════════════════════════════════════════════════
+import os as _w6_os
+
+_W6_R = 1.85            # LV-B 반경 (m)
+_W6_A = np.pi * _W6_R ** 2
+_W6_STYLE = {"description_width": "150px"}
+_W6_LAYOUT = {"width": "520px"}
+
+
+def _w6_interactive(func, **controls):
+    """슬라이더 위젯으로 func를 감싼다. W6_STATIC=1이면 기본값으로 한 번만 그린다."""
+    defaults = {k: (v.value if hasattr(v, "value") else v) for k, v in controls.items()}
+    if _w6_os.environ.get("W6_STATIC") == "1":
+        func(**defaults)
+        return
+    try:
+        interact(func, **controls)
+    except Exception:
+        func(**defaults)
+
+
+def _w6_fs(v, lo, hi, step, desc, fmt=None):
+    kw = dict(value=v, min=lo, max=hi, step=step, description=desc,
+              style=_W6_STYLE, layout=_W6_LAYOUT, continuous_update=False)
+    if fmt:
+        kw["readout_format"] = fmt
+    return FloatSlider(**kw)
+
+
+def _w6_is(v, lo, hi, step, desc):
+    return IntSlider(value=v, min=lo, max=hi, step=step, description=desc,
+                     style=_W6_STYLE, layout=_W6_LAYOUT, continuous_update=False)
+
+
+# ------------------------------------------------------------
+# 6-0. 얼마나 얇은가 — 음료캔 · 달걀 · 아틀라스 · LV-B (정적)
+# ------------------------------------------------------------
+def w6_thinness_ratio():
+    """지름 대비 벽두께(D/t)를 비교해 발사체 탱크가 '얼마나 얇은 껍데기'인지 보여준다."""
+    items = [
+        ("달걀 껍데기\n(지름 45 mm, 0.35 mm)", 45 / 0.35, "#9A9A9A"),
+        ("음료캔 옆면\n(지름 66 mm, 0.1 mm)", 66 / 0.10, "#9A9A9A"),
+        ("LV-B 1단 탱크(예제)\n(지름 3.7 m, 4 mm)", 3700 / 4.0, PRIMARY),
+        ("아틀라스 풍선탱크 두꺼운 곳\n(지름 3.05 m, 0.94 mm)", 3050 / 0.94, AMBER),
+        ("아틀라스 풍선탱크 얇은 곳\n(지름 3.05 m, 0.36 mm)", 3050 / 0.36, RED),
+    ]
+    fig, ax = plt.subplots(figsize=(10, 4.2))
+    _style(ax)
+    ys = np.arange(len(items))[::-1]
+    for y, (lab, r, c) in zip(ys, items):
+        ax.barh(y, r, color=c, height=0.6, zorder=3)
+        ax.text(r * 1.02, y, f"D/t ≈ {r:,.0f}", va="center", fontsize=10.5, color=INK, fontweight="bold")
+    ax.set_yticks(ys)
+    ax.set_yticklabels([i[0] for i in items], fontsize=9.5)
+    ax.set_xlabel("지름 ÷ 벽두께 (D/t) — 클수록 상대적으로 얇은 껍데기", fontsize=10)
+    ax.set_xlim(0, 10500)
+    ax.set_title("발사체 탱크는 음료캔보다 상대적으로 더 얇다", fontsize=13, fontweight="bold", loc="left")
+    plt.tight_layout()
+    plt.show()
+    print("· 음료캔의 D/t ≈ 660, 아틀라스 풍선탱크의 얇은 부위는 D/t ≈ 8,500 (약 13배 더 얇음)")
+    print("· 이렇게 얇은 껍데기가 수백 톤을 떠받치는 비결: ① 내압(풍선 효과) ② 보강 격자 ③ 좋은 재료")
+
+
+# ------------------------------------------------------------
+# 6-1. 비행 하중 타임라인 — 동압 q, 축 하중배수 n_x, qα (LV-B 1단 상승)
+# ------------------------------------------------------------
+def _w6_atm(h):
+    h = max(h, 0.0)
+    rho = 1.225 * np.exp(-h / 8500.0)
+    p_ratio = np.exp(-h / 8400.0)
+    a = 340.3 - 0.0039 * h if h < 11000 else 297.4
+    return rho, p_ratio, a
+
+
+def _w6_cd(M):
+    if M < 0.8:
+        return 0.25
+    if M < 1.1:
+        return 0.25 + (M - 0.8) / 0.3 * 0.25
+    if M < 3.0:
+        return 0.50 - (M - 1.1) / 1.9 * 0.25
+    return 0.25
+
+
+def _w6_ascent(tw=1.31, wind_ms=40.0, kick_v=80.0, kick_deg=2.5):
+    """LV-B 1단 상승을 2차원 중력선회로 적분 (교육용 단순모델).
+    수직 상승 → 속도 kick_v(m/s)에서 kick_deg만큼 기울임 → 이후 받음각 0의 중력선회."""
+    g0, M0, mp = 9.80665, 249.0e3, 173.7e3
+    T_sl = tw * M0 * g0
+    T_vac = T_sl * 1.10
+    mdot = (173.7e3 / 150.0) * (tw / 1.31)
+    tb = mp / mdot
+    dt = 0.05
+    t, V, gam, h, m, kicked = 0.0, 0.1, np.radians(90.0), 0.0, M0, False
+    keys = ["t", "h", "V", "q", "nx", "qa", "mach", "alpha"]
+    out = {k: [] for k in keys}
+    while t <= tb:
+        rho, pr, a = _w6_atm(h)
+        T = T_vac - (T_vac - T_sl) * pr
+        M = V / a
+        q = 0.5 * rho * V ** 2
+        D = q * _W6_A * _w6_cd(M)
+        Vw = wind_ms * np.exp(-((h - 11000.0) / 4000.0) ** 2)
+        alpha = np.degrees(np.arctan2(Vw * np.sin(gam), V + Vw * np.cos(gam))) if V > 1 else 0.0
+        nx = (T - D) / (m * g0)
+        for k, v in zip(keys, [t, h, V, q, nx, q * alpha, M, alpha]):
+            out[k].append(v)
+        g = g0 * (6.371e6 / (6.371e6 + h)) ** 2
+        dV = (T - D) / m - g * np.sin(gam)
+        if not kicked:
+            dgam = 0.0
+            if V >= kick_v:
+                gam, kicked = np.radians(90.0 - kick_deg), True
+        else:
+            dgam = -(g / V - V / (6.371e6 + h)) * np.cos(gam)
+        V += dV * dt
+        gam += dgam * dt
+        h = max(h + V * np.sin(gam) * dt, 0.0)
+        m -= mdot * dt
+        t += dt
+    return {k: np.array(v) for k, v in out.items()}
+
+
+def _w6_plot_flight_loads(tw=1.31, wind_ms=40.0):
+    r = _w6_ascent(tw, wind_ms)
+    t = r["t"]
+    iq, inx, iqa = np.argmax(r["q"]), np.argmax(r["nx"]), np.argmax(r["qa"])
+    fig, axs = plt.subplots(1, 3, figsize=(15, 4.2))
+    specs = [
+        (axs[0], r["q"] / 1e3, PRIMARY, "동압 q (kPa)", "① 동압 — 공기가 미는 힘", iq),
+        (axs[1], r["nx"], AMBER, "축 하중배수 nₓ (g)", "② 축 가속 — 위에서 누르는 무게", inx),
+        (axs[2], r["qa"] / 1e3, RED, "qα (kPa·deg)", "③ qα — 옆으로 꺾는 힘의 지표", iqa),
+    ]
+    for ax, y, c, yl, ttl, ip in specs:
+        _style(ax)
+        ax.plot(t, y, color=c, lw=2.2, zorder=3)
+        ax.plot(t[ip], y[ip], "o", color=c, ms=8, zorder=4)
+        ax.annotate(f"최대 {y[ip]:.1f}\n(t={t[ip]:.0f} s, h={r['h'][ip]/1e3:.1f} km)",
+                    (t[ip], y[ip]), xytext=(10, -34), textcoords="offset points", fontsize=9.5, color=INK)
+        ax.set_xlabel("이륙 후 시간 (s)")
+        ax.set_ylabel(yl)
+        ax.set_title(ttl, fontsize=11.5, fontweight="bold", loc="left")
+        ax.set_ylim(bottom=0, top=max(y) * 1.25 + 1e-9)
+    fig.suptitle(f"LV-B 1단 상승 하중 (이륙 T/W {tw:.2f}, 고도 11 km 제트기류 {wind_ms:.0f} m/s)",
+                 fontsize=13, fontweight="bold", x=0.01, ha="left")
+    plt.tight_layout()
+    plt.show()
+    print(f"· Max-Q {r['q'][iq]/1e3:.1f} kPa  @ t={t[iq]:.0f} s, 고도 {r['h'][iq]/1e3:.1f} km, 마하 {r['mach'][iq]:.2f}")
+    print(f"· 최대 축 하중배수 {r['nx'][inx]:.2f} g  @ 1단 연소종료 직전 (t={t[inx]:.0f} s) — 추진제가 줄수록 가속이 커짐")
+    print(f"· 최대 qα {r['qa'][iqa]/1e3:.0f} kPa·deg  @ t={t[iqa]:.0f} s (최대 받음각 {r['alpha'][iqa]:.1f}°)")
+
+
+def w6_flight_loads_explorer():
+    """이륙 추력중량비와 제트기류 풍속을 바꿔 동압·축가속·qα의 시간이력을 본다."""
+    _w6_interactive(_w6_plot_flight_loads,
+                    tw=_w6_fs(1.31, 1.15, 1.80, 0.01, "이륙 T/W", ".2f"),
+                    wind_ms=_w6_fs(40, 0, 90, 5, "제트기류 풍속 (m/s)", ".0f"))
+
+
+# ------------------------------------------------------------
+# 6-2. 단면 내력 — 축력 N, 전단력 V, 굽힘모멘트 M, 등가압축하중 P_eq
+# ------------------------------------------------------------
+# (구간 이름, 시작 x, 끝 x, 구조질량 kg, 추진제질량 kg(만재), 1단 추진제 여부, 탱크 여부, 색)
+_W6_SEGS = [
+    ("1단 엔진부",    0.00,  3.00, 7000,      0, False, False, "#8A8A8A"),
+    ("1단 RP-1",      3.00,  9.86, 2500,  52249, True,  True,  AMBER),
+    ("1단 탱크간부",  9.86, 11.36,  500,      0, False, False, "#B8B8B8"),
+    ("1단 LOX",      11.36, 22.60, 3100, 125398, True,  True,  PRIMARY),
+    ("단간부",       22.60, 25.40, 1000,      0, False, False, "#B8B8B8"),
+    ("2단 엔진부",   25.40, 27.80, 1500,      0, False, False, "#8A8A8A"),
+    ("2단 RP-1",     27.80, 30.29, 1000,  15677, False, True,  AMBER),
+    ("2단 탱크간부", 30.29, 31.29,  300,      0, False, False, "#B8B8B8"),
+    ("2단 LOX",      31.29, 35.10, 1400,  37625, False, True,  PRIMARY),
+    ("페어링+탑재체", 35.10, 43.10, 6500,      0, False, False, "#6B8FB8"),
+]
+
+
+def _w6_section_loads(q_kPa=30.0, alpha_deg=4.0, prop_frac=0.6, p_MPa=0.25):
+    L, dx = 43.10, 0.02
+    x = np.arange(0, L + dx / 2, dx)
+    lin = np.zeros_like(x)          # 선질량 (kg/m)
+    tank = np.zeros_like(x, dtype=bool)
+    for name, x0, x1, ms, mp, s1, tk, c in _W6_SEGS:
+        m = ms + mp * (prop_frac if s1 else 1.0)
+        sel = (x >= x0) & (x < x1)
+        lin[sel] += m / (x1 - x0)
+        if tk:
+            tank |= sel
+    dm = lin * dx
+    Mtot = dm.sum()
+    x_cg = (dm * x).sum() / Mtot
+    q = q_kPa * 1e3
+    a = np.radians(alpha_deg)
+    T = 3.40e6
+    Dg = q * _W6_A * 0.40
+    ax_acc = (T - Dg) / Mtot
+    # 횡방향: 기수부 공력 법선력 + 짐벌력 (모멘트 평형, 각가속도 0)
+    x_n, x_g = 39.1, 1.5
+    Nn = q * _W6_A * 2.0 * a
+    Fg = Nn * (x_n - x_cg) / (x_cg - x_g)
+    az = (Nn + Fg) / Mtot
+    # 위(기수)에서 아래로 누적
+    m_above = np.cumsum(dm[::-1])[::-1] - dm  # x보다 위쪽 질량
+    N = Dg + ax_acc * m_above
+    Fext = Nn * (x < x_n) + Fg * (x < x_g)
+    V = Fext - az * m_above
+    # M(x) = Σ_위 F_i (x_i - x) - a_z ∫_위 (x' - x) dm
+    mom_above = np.cumsum((dm * x)[::-1])[::-1] - dm * x
+    M = Nn * np.clip(x_n - x, 0, None) + Fg * np.clip(x_g - x, 0, None) - az * (mom_above - x * m_above)
+    Peq = N + 2 * np.abs(M) / _W6_R
+    Pnet = Peq - np.where(tank, p_MPa * 1e6 * _W6_A, 0.0)
+    return dict(x=x, N=N, V=V, M=M, Peq=Peq, Pnet=Pnet, Mtot=Mtot, x_cg=x_cg, ax=ax_acc, az=az,
+                Nn=Nn, Fg=Fg, Dg=Dg, tank=tank)
+
+
+def _w6_plot_section_loads(q_kPa=30.0, alpha_deg=4.0, prop_frac=0.6, p_MPa=0.25):
+    r = _w6_section_loads(q_kPa, alpha_deg, prop_frac, p_MPa)
+    x = r["x"]
+    fig, axs = plt.subplots(1, 5, figsize=(16, 6.2), sharey=True,
+                            gridspec_kw={"width_ratios": [0.9, 1, 1, 1, 1.3]})
+    a0 = axs[0]
+    a0.set_xlim(-2.2, 2.2)
+    for name, x0, x1, ms, mp, s1, tk, c in _W6_SEGS:
+        a0.add_patch(Rectangle((-_W6_R, x0), 2 * _W6_R, x1 - x0, fc=c, ec="white", lw=1.2, alpha=0.85))
+        if x1 - x0 > 2.0:
+            a0.text(0, (x0 + x1) / 2, name, ha="center", va="center", fontsize=8.5, color="white", fontweight="bold")
+    a0.plot([0], [r["x_cg"]], marker="o", ms=10, mfc="white", mec=INK, mew=2)
+    a0.text(2.0, r["x_cg"], "무게중심", va="center", ha="right", fontsize=8.5, color=INK)
+    a0.annotate("", xy=(-1.0, 39.1), xytext=(-2.2, 39.1), arrowprops=dict(arrowstyle="->", color=RED, lw=2))
+    a0.annotate("", xy=(-1.0, 1.5), xytext=(-2.2, 1.5), arrowprops=dict(arrowstyle="->", color=GREEN, lw=2))
+    a0.text(-2.15, 40.2, "공력", color=RED, fontsize=8.5)
+    a0.text(-2.15, 2.4, "짐벌", color=GREEN, fontsize=8.5)
+    a0.axis("off")
+    a0.set_title("LV-B 스테이션", fontsize=11, fontweight="bold")
+    panels = [
+        (axs[1], r["N"] / 1e6, AMBER, "축력 N (MN)", "① 축력 — 위 질량 × 가속"),
+        (axs[2], r["V"] / 1e3, GREEN, "전단력 V (kN)", "② 전단력"),
+        (axs[3], r["M"] / 1e3, RED, "굽힘모멘트 M (kN·m)", "③ 굽힘모멘트"),
+    ]
+    for ax, y, c, xl, ttl in panels:
+        _style(ax)
+        ax.plot(y, x, color=c, lw=2.2)
+        ax.fill_betweenx(x, 0, y, color=c, alpha=0.12)
+        ax.axvline(0, color="#999999", lw=0.8)
+        ax.set_xlabel(xl)
+        ax.set_title(ttl, fontsize=11, fontweight="bold")
+    ax = axs[4]
+    _style(ax)
+    ax.plot(r["Peq"] / 1e6, x, color=INK, lw=2.2, label="P_eq = N + 2|M|/r")
+    ax.plot(r["Pnet"] / 1e6, x, color=PRIMARY, lw=2.2, ls="--", label=f"내압 {p_MPa:.2f} MPa 반영")
+    ax.fill_betweenx(x, r["Pnet"] / 1e6, r["Peq"] / 1e6, where=r["tank"], color=PRIMARY, alpha=0.15)
+    ax.axvline(0, color="#999999", lw=0.8)
+    ax.set_xlabel("등가 압축하중 (MN)")
+    ax.set_title("④ 등가하중과 내압 효과", fontsize=11, fontweight="bold")
+    ax.legend(fontsize=8.5, loc="upper right")
+    axs[0].set_ylabel("기저부로부터 거리 x (m)")
+    axs[0].set_ylim(0, 43.5)
+    fig.suptitle(f"단면 절단(section cut) 내력 — q={q_kPa:.0f} kPa, α={alpha_deg:.1f}°, 1단 추진제 잔량 {prop_frac*100:.0f}%",
+                 fontsize=13, fontweight="bold", x=0.01, ha="left")
+    plt.tight_layout()
+    plt.show()
+    i = int(np.argmax(r["Peq"]))
+    print(f"· 총질량 {r['Mtot']/1e3:,.0f} t, 무게중심 x={r['x_cg']:.1f} m, 축가속 {r['ax']/9.81:.2f} g")
+    print(f"· 기수부 공력 법선력 {r['Nn']/1e3:,.0f} kN, 이를 상쇄하는 짐벌 횡력 {r['Fg']/1e3:,.0f} kN")
+    print(f"· 최대 굽힘모멘트 {np.max(np.abs(r['M']))/1e3:,.0f} kN·m @ x={x[np.argmax(np.abs(r['M']))]:.1f} m")
+    print(f"· 최대 등가 압축하중 {r['Peq'][i]/1e6:.2f} MN @ x={x[i]:.1f} m "
+          f"(축력 {r['N'][i]/1e6:.2f} + 굽힘 기여 {2*abs(r['M'][i])/_W6_R/1e6:.2f})")
+    it = int(np.argmax(np.where(r["tank"], r["Peq"], -1)))
+    print(f"· 탱크 구간 최대 등가 압축하중 {r['Peq'][it]/1e6:.2f} MN @ x={x[it]:.1f} m → 내압 반영 시 {r['Pnet'][it]/1e6:.2f} MN")
+    print(f"· 탱크 내압이 덜어주는 압축력 = p·πr² = {p_MPa*1e6*_W6_A/1e6:.2f} MN (탱크 구간에만 적용)")
+
+
+def w6_section_loads_explorer():
+    """동압·받음각·추진제 잔량·탱크 내압을 바꿔 스테이션별 내력 분포를 본다."""
+    _w6_interactive(_w6_plot_section_loads,
+                    q_kPa=_w6_fs(30, 0, 50, 1, "동압 q (kPa)", ".0f"),
+                    alpha_deg=_w6_fs(4.0, 0, 10, 0.5, "받음각 α (deg)", ".1f"),
+                    prop_frac=_w6_fs(0.6, 0.05, 1.0, 0.05, "1단 추진제 잔량", ".2f"),
+                    p_MPa=_w6_fs(0.25, 0, 0.45, 0.01, "탱크 내압 (MPa)", ".2f"))
+
+
+# ------------------------------------------------------------
+# 6-3. 통계적 하중 — 몬테카를로와 99/90 한계하중
+# ------------------------------------------------------------
+_W6_ZP = 2.3263   # 99% 정규분위수
+_W6_ZG = 1.2816   # 90% 정규분위수
+
+
+def _w6_tolerance_k(n, zp=_W6_ZP, zg=_W6_ZG):
+    """정규분포 단측 공차계수 k (p=99%, 신뢰도 90%) — Natrella 근사식."""
+    n = np.asarray(n, dtype=float)
+    a = 1 - zg ** 2 / (2 * (n - 1))
+    b = zp ** 2 - zg ** 2 / n
+    return (zp + np.sqrt(zp ** 2 - a * b)) / a
+
+
+def _w6_plot_statistical(n_runs=60, fs=1.25, seed=7):
+    rng = np.random.default_rng(int(seed))
+    mu_true, cov = 150.0, 0.18
+    s_ln = np.sqrt(np.log(1 + cov ** 2))
+    m_ln = np.log(mu_true) - s_ln ** 2 / 2
+    x = rng.lognormal(m_ln, s_ln, int(n_runs))
+    mean, sd = x.mean(), x.std(ddof=1)
+    k = float(_w6_tolerance_k(n_runs))
+    lim = mean + k * sd
+    p99 = np.percentile(x, 99)
+    ult = lim * fs
+    fig, axs = plt.subplots(1, 2, figsize=(15, 4.4), gridspec_kw={"width_ratios": [1.5, 1]})
+    ax = axs[0]
+    _style(ax)
+    ax.hist(x, bins=max(8, int(np.sqrt(n_runs))), color="#9FB4CC", edgecolor="white", zorder=3)
+    for v, c, lab, ls in [(mean, INK_MUTED, f"평균 {mean:.0f}", ":"),
+                          (p99, PRIMARY, f"표본 99% 분위 {p99:.0f}", "--"),
+                          (lim, AMBER, f"99/90 한계하중 {lim:.0f}", "-"),
+                          (ult, RED, f"극한하중 ×{fs:.2f} = {ult:.0f}", "-")]:
+        ax.axvline(v, color=c, lw=2.2, ls=ls, label=lab, zorder=4)
+    ax.set_xlabel("비행 1회당 최대 qα (kPa·deg) — 몬테카를로 표본")
+    ax.set_ylabel("빈도")
+    ax.set_title(f"① {n_runs}회 모의비행에서 설계하중 정하기", fontsize=11.5, fontweight="bold", loc="left")
+    ax.legend(fontsize=9, loc="upper right")
+    ax = axs[1]
+    _style(ax)
+    ns = np.arange(10, 2001)
+    ax.plot(ns, _w6_tolerance_k(ns), color=AMBER, lw=2.2)
+    ax.axhline(_W6_ZP, color=INK_MUTED, ls=":", lw=1.5)
+    ax.text(1990, _W6_ZP + 0.04, "표본이 무한하면 k → 2.33", ha="right", fontsize=9, color=INK_MUTED)
+    ax.plot([n_runs], [k], "o", color=RED, ms=9)
+    ax.annotate(f"n={n_runs} → k={k:.2f}", (n_runs, k), xytext=(14, 8), textcoords="offset points", fontsize=10)
+    ax.set_xscale("log")
+    ax.set_xlabel("모의비행 횟수 n (로그 눈금)")
+    ax.set_ylabel("공차계수 k (한계하중 = 평균 + k·표준편차)")
+    ax.set_title("② 데이터가 적을수록 '모르는 것'에 대한 여유가 커진다", fontsize=11.5, fontweight="bold", loc="left")
+    plt.tight_layout()
+    plt.show()
+    print(f"· 표본 평균 {mean:.0f}, 표준편차 {sd:.0f} → 99/90 한계하중 = {mean:.0f} + {k:.2f}×{sd:.0f} = {lim:.0f} kPa·deg")
+    print(f"· 극한(설계)하중 = 한계하중 × 안전계수 {fs:.2f} = {ult:.0f} kPa·deg")
+    print("· 해석: '100번 날면 99번은 이 값 아래' 라는 주장을 90% 확신으로 할 수 있는 선이 한계하중")
+
+
+def w6_statistical_loads_explorer():
+    """모의비행 횟수·안전계수·난수시드를 바꿔 99/90 한계하중과 극한하중이 어떻게 정해지는지 본다."""
+    _w6_interactive(_w6_plot_statistical,
+                    n_runs=_w6_is(60, 10, 2000, 10, "모의비행 횟수 n"),
+                    fs=_w6_fs(1.25, 1.0, 1.6, 0.05, "안전계수 FS", ".2f"),
+                    seed=_w6_is(7, 1, 50, 1, "난수 시드"))
+
+
+# ------------------------------------------------------------
+# 6-4. 원통 탱크 점검 — 내압(후프응력)과 좌굴(knockdown, 내압 안정화)
+# ------------------------------------------------------------
+# 재료 대표치 (상온, 교육용): E(GPa), ν, 항복/허용응력(MPa), 밀도(kg/m³), 최소 제작두께(mm), 색, 용접효율
+#   용접효율 = 용접부 허용응력 / 모재 허용응력 (교육용 가정치, 복합재는 접합부 저감을 같은 자리에 둠)
+_W6_MAT = {
+    "Al 2219-T87 (새턴V·셔틀 ET·누리호급)": (72.4, 0.33, 390, 2840, 1.0, PRIMARY, 0.70),
+    "Al-Li 2195-T8 (셔틀 SLWT·팰컨9급)":    (76.0, 0.33, 540, 2710, 1.0, GREEN, 0.65),
+    "스테인리스 304L 상온 (스타십급)":      (193., 0.29, 210, 7900, 1.0, "#7A7A7A", 0.90),
+    "스테인리스 301 완전경화 (아틀라스)":     (193., 0.29, 965, 7900, 0.3, AMBER, 0.50),
+    "CFRP 준등방 적층 (일렉트론급)":         (55.0, 0.30, 450, 1580, 2.0, PURPLE, 0.80),
+}
+
+
+def _w6_sigma_cr(E, nu, sy, R, t, p):
+    """축압축 원통 좌굴응력 — 고전해 × NASA SP-8007 knockdown + 내압 안정화(근사) [Pa]"""
+    cl = E / np.sqrt(3 * (1 - nu ** 2))         # σ_cl·R/t
+    phi = np.sqrt(R / t) / 16.0
+    gam = 1 - 0.901 * (1 - np.exp(-phi))
+    pbar = (p / E) * (R / t) ** 2
+    dC = 0.22 / (1 + (0.35 / np.maximum(pbar, 1e-9)) ** 0.9) if p > 0 else 0.0
+    C = np.minimum(gam * cl / E + dC, cl / E)
+    return np.minimum(C * E * t / R, sy)
+
+
+def _w6_check(mat, t_mm, p_MPa, P_MN, fs=1.25):
+    E, nu, sy, rho, tmin, c, we = _W6_MAT[mat]
+    E, sy = E * 1e9, sy * 1e6
+    R, t, p = _W6_R, t_mm / 1e3, p_MPa * 1e6
+    s_h = p * R / t
+    ms_p = we * sy / (fs * s_h) - 1 if p > 0 else np.inf
+    scr0 = _w6_sigma_cr(E, nu, sy, R, t, 0.0)
+    scr = _w6_sigma_cr(E, nu, sy, R, t, p)
+    Pcr0 = 2 * np.pi * R * t * scr0
+    Pcr = 2 * np.pi * R * t * scr + p * np.pi * R ** 2
+    ms_b0 = Pcr0 / (P_MN * 1e6) - 1
+    ms_b = Pcr / (P_MN * 1e6) - 1
+    mass_pm = rho * 2 * np.pi * R * t
+    return dict(s_h=s_h, ms_p=ms_p, Pcr0=Pcr0, Pcr=Pcr, ms_b0=ms_b0, ms_b=ms_b, mass_pm=mass_pm,
+                tmin=tmin, c=c, E=E, nu=nu, sy=sy, rho=rho, we=we)
+
+
+def _w6_required_t(mat, p_MPa, P_MN, pressurized=True, fs=1.25):
+    ts = np.linspace(0.2, 25, 2000)
+    E, nu, sy, rho, tmin, c, we = _W6_MAT[mat]
+    tp = fs * p_MPa * 1e6 * _W6_R / (we * sy * 1e6) * 1e3
+    tb = None
+    for t in ts:
+        r = _w6_check(mat, t, p_MPa if pressurized else 0.0, P_MN, fs)
+        if (r["ms_b"] if pressurized else r["ms_b0"]) >= 0:
+            tb = t
+            break
+    tb = tb if tb is not None else ts[-1]
+    t_req = max(tp, tb, tmin)
+    gov = ["내압(후프응력)", "좌굴", "최소 제작두께"][int(np.argmax([tp, tb, tmin]))]
+    return t_req, tp, tb, tmin, gov
+
+
+def _w6_plot_cylinder(mat="Al 2219-T87 (새턴V·셔틀 ET·누리호급)", t_mm=4.0, p_MPa=0.25, P_MN=2.5):
+    r = _w6_check(mat, t_mm, p_MPa, P_MN)
+    ts = np.linspace(0.5, 12, 200)
+    P0 = [_w6_check(mat, t, 0.0, P_MN)["Pcr0"] / 1e6 for t in ts]
+    Pp = [_w6_check(mat, t, p_MPa, P_MN)["Pcr"] / 1e6 for t in ts]
+    fig, axs = plt.subplots(1, 2, figsize=(15, 4.4), gridspec_kw={"width_ratios": [1.4, 1]})
+    ax = axs[0]
+    _style(ax)
+    ax.plot(ts, P0, color=INK_MUTED, lw=2, ls="--", label="내압 없음 (빈 탱크)")
+    ax.plot(ts, Pp, color=r["c"], lw=2.4, label=f"내압 {p_MPa:.2f} MPa (풍선 효과)")
+    ax.axhline(P_MN, color=RED, lw=2, label=f"설계 압축하중 {P_MN:.1f} MN")
+    ax.axvline(t_mm, color=INK, lw=1, ls=":")
+    ax.plot([t_mm], [r["Pcr"] / 1e6], "o", color=r["c"], ms=9)
+    ax.set_xlabel("벽두께 t (mm)")
+    ax.set_ylabel("좌굴 허용 압축하중 (MN)")
+    ax.set_ylim(0, max(P_MN * 3, r["Pcr"] / 1e6 * 1.2))
+    ax.set_title("① 두께와 내압이 좌굴 강도를 어떻게 바꾸나", fontsize=11.5, fontweight="bold", loc="left")
+    ax.legend(fontsize=9, loc="upper left")
+    ax = axs[1]
+    _style(ax)
+    names = ["내압 MS\n(후프응력)", "좌굴 MS\n(빈 탱크)", "좌굴 MS\n(가압)"]
+    vals = [min(r["ms_p"], 5), r["ms_b0"], r["ms_b"]]
+    cols = [GREEN if v >= 0 else RED for v in vals]
+    b = ax.bar(names, vals, color=cols, width=0.55, zorder=3)
+    for bb, v in zip(b, vals):
+        ax.text(bb.get_x() + bb.get_width() / 2, v + 0.08 if v >= 0 else v / 2, f"{v:+.2f}",
+                ha="center", va="center" if v < 0 else "bottom", fontsize=11, fontweight="bold",
+                color="white" if v < 0 else INK)
+    ax.axhline(0, color=INK, lw=1)
+    ax.set_ylabel("안전여유 MS (≥ 0 이면 통과)")
+    ax.set_title("② 안전여유 점검", fontsize=11.5, fontweight="bold", loc="left")
+    plt.tight_layout()
+    plt.show()
+    t_req, tp, tb, tmin, gov = _w6_required_t(mat, p_MPa, P_MN)
+    print(f"· 재료 {mat}: E={r['E']/1e9:.0f} GPa, 허용응력 {r['sy']/1e6:.0f} MPa, 밀도 {r['rho']:.0f} kg/m³")
+    print(f"· 후프응력 σ = pR/t = {r['s_h']/1e6:.0f} MPa → 안전계수 1.25를 곱해 용접부 허용응력 "
+          f"{r['we']*r['sy']/1e6:.0f} MPa (모재 × 용접효율 {r['we']:.2f})와 비교")
+    print(f"· 좌굴 허용하중: 빈 탱크 {r['Pcr0']/1e6:.2f} MN → 가압 {r['Pcr']/1e6:.2f} MN (내압이 {r['Pcr']/max(r['Pcr0'],1):.1f}배로 키움)")
+    print(f"· 벽 질량 {r['mass_pm']:.0f} kg/m  (LV-B 1단 LOX 원통부 9.4 m 기준 {r['mass_pm']*9.4/1e3:.2f} t)")
+    print(f"· 이 조건의 필요두께 ≈ {t_req:.1f} mm — 지배 기준: {gov} (내압 {tp:.1f} / 좌굴 {tb:.1f} / 최소 {tmin:.1f} mm)")
+    print("  ※ 실제 탱크는 지상 무가압 취급·보증압 시험·국부 하중(부착물, 컷아웃)까지 고려해 이보다 두껍게 설계")
+
+
+def w6_cylinder_explorer():
+    """재료·벽두께·탱크 내압·설계 압축하중을 바꿔 내압 강도와 좌굴 여유를 점검한다."""
+    _w6_interactive(_w6_plot_cylinder,
+                    mat=Dropdown(options=list(_W6_MAT.keys()), value="Al 2219-T87 (새턴V·셔틀 ET·누리호급)",
+                                 description="재료", style=_W6_STYLE, layout=_W6_LAYOUT),
+                    t_mm=_w6_fs(4.0, 0.5, 12, 0.1, "벽두께 t (mm)", ".1f"),
+                    p_MPa=_w6_fs(0.25, 0, 0.6, 0.01, "탱크 내압 (MPa)", ".2f"),
+                    P_MN=_w6_fs(2.5, 0.5, 6, 0.1, "설계 압축하중 (MN)", ".1f"))
+
+
+# ------------------------------------------------------------
+# 6-5. 재료 선택 — 같은 탱크를 재료별로 만들면 얼마나 무거운가
+# ------------------------------------------------------------
+def _w6_plot_material_compare(p_MPa=0.30, P_MN=2.5, pressurized=False):
+    names, masses, govs, cols, treq = [], [], [], [], []
+    for mat in _W6_MAT:
+        t_req, tp, tb, tmin, gov = _w6_required_t(mat, p_MPa, P_MN, pressurized)
+        E, nu, sy, rho, tm, c, we = _W6_MAT[mat]
+        names.append(mat.split(" (")[0])
+        masses.append(rho * 2 * np.pi * _W6_R * (t_req / 1e3) * 9.4 / 1e3)
+        govs.append(gov)
+        cols.append(c)
+        treq.append(t_req)
+    fig, axs = plt.subplots(1, 2, figsize=(15, 4.4), gridspec_kw={"width_ratios": [1.3, 1]})
+    ax = axs[0]
+    _style(ax)
+    ys = np.arange(len(names))[::-1]
+    ax.barh(ys, masses, color=cols, height=0.6, zorder=3)
+    for y, m, g, t in zip(ys, masses, govs, treq):
+        ax.text(m * 1.02 + 0.02, y, f"{m:.2f} t  (t={t:.1f} mm, {g} 지배)", va="center", fontsize=9.5)
+    ax.set_yticks(ys)
+    ax.set_yticklabels(names, fontsize=10)
+    ax.set_xlim(0, max(masses) * 1.75)
+    ax.set_xlabel("LV-B 1단 LOX 탱크 원통부(9.4 m) 벽 질량 (t) — 모노코크 가정")
+    ax.set_title(f"① 같은 탱크, 다른 재료 (내압 {p_MPa:.2f} MPa, 압축 {P_MN:.1f} MN, "
+                 f"{'가압 비행' if pressurized else '무가압 보수 설계'})", fontsize=11.5, fontweight="bold", loc="left")
+    ax = axs[1]
+    _style(ax)
+    for mat, (E, nu, sy, rho, tm, c, we) in _W6_MAT.items():
+        ax.scatter(sy / rho * 1e3, E / rho * 1e3, s=160, color=c, zorder=3, edgecolor="white")
+        ax.annotate(mat.split(" (")[0], (sy / rho * 1e3, E / rho * 1e3), xytext=(8, 4),
+                    textcoords="offset points", fontsize=9)
+    ax.set_xlabel("비강도 σ/ρ (kN·m/kg) — 내압에 유리")
+    ax.set_ylabel("비강성 E/ρ (MN·m/kg) — 좌굴에 유리")
+    ax.set_title("② 재료 지도: 무엇이 '좋은' 재료인가", fontsize=11.5, fontweight="bold", loc="left")
+    plt.tight_layout()
+    plt.show()
+    print("· 금속의 비강성(E/ρ)은 알루미늄·스테인리스가 거의 같음 — 무거운 재료는 대신 두께를 얇게 써서 보상")
+    print("· 얇은 탱크는 '터지는 것'보다 '찌그러지는 것(좌굴)'이 먼저 문제 되는 경우가 많음 → 강성(E)과 두께가 중요")
+    print("· 스테인리스는 무겁지만 극저온에서 강도가 오르고 고온에 강하며 kg당 값이 매우 쌈 → 질량만이 기준은 아님")
+    print("· 실제 탱크는 이소그리드·스트링거 보강으로 모노코크보다 훨씬 가볍게 만듦 (다음 실습)")
+
+
+def w6_material_compare_explorer():
+    """탱크 내압·압축하중·가압 여부를 바꾸며 재료별 필요두께와 벽 질량을 비교한다."""
+    _w6_interactive(_w6_plot_material_compare,
+                    p_MPa=_w6_fs(0.30, 0.05, 0.6, 0.01, "탱크 내압 (MPa)", ".2f"),
+                    P_MN=_w6_fs(2.5, 0.5, 6, 0.1, "설계 압축하중 (MN)", ".1f"),
+                    pressurized=widgets.Checkbox(value=False, description="비행 중 가압 효과 반영",
+                                                 style=_W6_STYLE, layout=_W6_LAYOUT))
+
+
+# ------------------------------------------------------------
+# 6-6. 이소그리드 — 두꺼운 판을 깎아 삼각 격자를 남긴다
+# ------------------------------------------------------------
+def _w6_plot_isogrid(t_mm=2.0, d_mm=10.0, b_mm=2.5, a_mm=80.0):
+    h = a_mm * np.sqrt(3) / 2
+    alpha = b_mm * d_mm / (t_mm * h)
+    t_bar = t_mm * (1 + 3 * alpha)          # 질량 등가두께
+    T = t_mm + d_mm                          # 원소재 판두께
+    btf = T / t_bar
+    # 단위폭 굽힘강성 (한 방향, 리브 cos⁴ 기여 근사)
+    w = 1.125 * b_mm / h
+    A1, y1 = t_mm, t_mm / 2
+    A2, y2 = w * d_mm, t_mm + d_mm / 2
+    yc = (A1 * y1 + A2 * y2) / (A1 + A2)
+    I_iso = t_mm ** 3 / 12 + A1 * (y1 - yc) ** 2 + w * d_mm ** 3 / 12 + A2 * (y2 - yc) ** 2
+    I_mono = t_bar ** 3 / 12
+    fig, axs = plt.subplots(1, 3, figsize=(16, 4.6), gridspec_kw={"width_ratios": [1.1, 1, 1]})
+    ax = axs[0]
+    ax.set_aspect("equal")
+    ax.axis("off")
+    S = 260
+    ax.add_patch(Rectangle((0, 0), S, S * 0.8, fc="#E8EEF5", ec="none"))
+    lw = max(1.0, b_mm * 1.6)
+    for k in range(-8, 12):
+        y0 = k * h
+        ax.plot([0, S], [y0, y0], color=PRIMARY, lw=lw)
+        for sgn in (1, -1):
+            xs = np.array([0, S])
+            ax.plot(xs, y0 + sgn * np.sqrt(3) * (xs - (k % 2) * a_mm / 2), color=PRIMARY, lw=lw)
+    ax.set_xlim(0, S)
+    ax.set_ylim(0, S * 0.8)
+    ax.set_title(f"① 격자 모양 (한 변 a={a_mm:.0f} mm, 높이 h={h:.0f} mm)", fontsize=11, fontweight="bold", loc="left")
+    ax = axs[1]
+    _style(ax)
+    ax.bar(["원소재 판", "깎고 남은 것\n(질량 등가)"], [T, t_bar], color=["#B8B8B8", PRIMARY], width=0.5, zorder=3)
+    ax.text(0, T * 1.02, f"{T:.1f} mm", ha="center", fontsize=11, fontweight="bold")
+    ax.text(1, t_bar * 1.04, f"{t_bar:.2f} mm", ha="center", fontsize=11, fontweight="bold")
+    ax.set_ylabel("두께 (mm)")
+    ax.set_title(f"② 깎여 나가는 양: {100*(1-1/btf):.0f}% (구매/비행 비 {btf:.1f})", fontsize=11, fontweight="bold", loc="left")
+    ax = axs[2]
+    _style(ax)
+    ratio = I_iso / I_mono
+    ax.bar(["같은 무게의\n민짜 판(모노코크)", "이소그리드"], [1, ratio], color=["#B8B8B8", GREEN], width=0.5, zorder=3)
+    ax.text(1, ratio * 1.02, f"{ratio:.0f}배", ha="center", fontsize=13, fontweight="bold", color=GREEN)
+    ax.set_ylabel("굽힘강성 (상대값)")
+    ax.set_title("③ 같은 무게에서 굽힘강성", fontsize=11, fontweight="bold", loc="left")
+    plt.tight_layout()
+    plt.show()
+    print(f"· 리브 면적비 α = b·d/(t·h) = {alpha:.2f} → 질량 등가두께 t̄ = t(1+3α) = {t_bar:.2f} mm")
+    print(f"· 두께 {T:.1f} mm 판을 사서 {t_bar:.2f} mm 만큼만 비행 → 칩으로 버려지는 비율 {100*(1-1/btf):.0f}%")
+    print(f"· 같은 질량의 평판 대비 굽힘강성 약 {ratio:.0f}배 (한 방향 단순 근사) → 좌굴에 강해짐")
+    if d_mm / b_mm > 8:
+        print("  ⚠ 리브 깊이/폭(d/b)이 8을 넘음 — 얇은 리브 자체가 국부적으로 접혀 무너질(크리플링) 위험")
+
+
+def w6_isogrid_explorer():
+    """외피두께·리브 깊이·리브 폭·격자 크기를 바꿔 이소그리드의 질량·가공량·강성을 본다."""
+    _w6_interactive(_w6_plot_isogrid,
+                    t_mm=_w6_fs(2.0, 1.0, 5.0, 0.1, "외피두께 t (mm)", ".1f"),
+                    d_mm=_w6_fs(10, 3, 25, 0.5, "리브 깊이 d (mm)", ".1f"),
+                    b_mm=_w6_fs(2.5, 1.0, 6.0, 0.1, "리브 폭 b (mm)", ".1f"),
+                    a_mm=_w6_fs(80, 40, 160, 5, "격자 한 변 a (mm)", ".0f"))
+
+
+# ------------------------------------------------------------
+# 6-7. 탱크 기술의 계보 (정적 타임라인)
+# ------------------------------------------------------------
+def w6_tank_history_timeline():
+    ev = [
+        (1944, "V-2", "비통합(비구조) 탱크\n외피가 하중 담당", "#8A8A8A", 1),
+        (1953, "레드스톤", "통합 탱크\n탱크 벽 = 기체 동체", "#8A8A8A", -1),
+        (1957, "아틀라스", "풍선 탱크\n0.36~0.94 mm 스테인리스\n가압해야 서 있음", AMBER, 1),
+        (1967, "새턴V S-II", "공통격벽\nLH2/LOX 한 통", PRIMARY, -1),
+        (1998, "셔틀 SLWT", "Al-Li 2195 외부탱크\n약 3.4 t 경량화", GREEN, 1),
+        (2010, "팰컨 9", "Al-Li + 마찰교반용접\n대량·재사용 생산", GREEN, -1),
+        (2017, "일렉트론", "탄소복합재 탱크\n소형 발사체", PURPLE, 1),
+        (2019, "스타십", "스테인리스 회귀\n재료비·고온·제작속도", "#555555", -1),
+        (2021, "누리호", "KAI 사천 탱크 국산화\n알루미늄 합금·스피닝 돔", RED, 1),
+    ]
+    fig, ax = plt.subplots(figsize=(16, 5.2))
+    ax.axhline(0, color=INK, lw=2, zorder=1)
+    for i, (yr_, name, txt, c, side) in enumerate(ev):
+        yr = i * 10.0                      # 연도 간격과 무관하게 등간격 배치 (가독성)
+        ax.plot([yr, yr], [0, side * 0.9], color=c, lw=1.5, zorder=2)
+        ax.plot(yr, 0, "o", color=c, ms=10, zorder=3, mec="white", mew=1.5)
+        ax.text(yr, side * 1.0, f"{yr_}  {name}", ha="center", va="bottom" if side > 0 else "top",
+                fontsize=11, fontweight="bold", color=c)
+        ax.text(yr, side * 1.42 if side > 0 else side * 1.38, txt, ha="center",
+                va="bottom" if side > 0 else "top", fontsize=9, color=INK)
+    ax.set_xlim(-6, (len(ev) - 1) * 10 + 6)
+    ax.set_ylim(-3.0, 3.0)
+    ax.axis("off")
+    ax.set_title("탱크 기술의 계보 — 더 얇게, 더 크게, 더 싸게", fontsize=14, fontweight="bold", loc="left")
+    plt.tight_layout()
+    plt.show()
+
+
+# ------------------------------------------------------------
+# 6-8. 추진제 탱크 제작 공정 (정적 흐름도)
+# ------------------------------------------------------------
+def w6_tank_process_flow():
+    fig, ax = _fig(15, 5.0)
+    steps = [
+        ("① 원소재", "알루미늄 합금 판재\n(2219, Al-Li 등)\n재료 인증·추적", "white", PRIMARY),
+        ("② 깎기", "기계/화학 밀링\n이소그리드·두께 테이퍼\n원소재의 70~90% 칩", "white", PRIMARY),
+        ("③ 굽히기", "롤 성형(원통 패널)\n돔: 스피닝 또는\n고어(꽃잎) 패널", "white", PRIMARY),
+        ("④ 길이 방향 용접", "패널 → 원통 배럴\n마찰교반용접(FSW)\n변형 관리가 관건", C_AMBER_L, C_AMBER),
+        ("⑤ 원주 용접", "돔 + Y링 + 배럴\n→ 탱크 한 통\n대형 치구·회전 테이블", C_AMBER_L, C_AMBER),
+        ("⑥ 비파괴검사", "X선·초음파·침투\n용접 결함 크기 확인\n= 수명의 출발점", "white", C_RED),
+        ("⑦ 세척·청정", "LOX 호환 청정도\n입자·유분 제거\n건조·밀봉", "white", C_RED),
+        ("⑧ 압력·누설시험", "보증압(proof) 시험\n헬륨 누설시험\n극저온 시험", "white", C_RED),
+    ]
+    W, H, gap = 3.3, 1.9, 0.45
+    for i, (ttl, body, fc, ec) in enumerate(steps):
+        row, k = divmod(i, 4)
+        col = k if row == 0 else 3 - k            # 아랫줄은 오른쪽→왼쪽 (ㄹ자 흐름)
+        x = col * (W + gap)
+        y = 2.6 - row * 2.75
+        _box(ax, x, y, W, H, "", fc, ec, 10)
+        ax.text(x + W / 2, y + H - 0.32, ttl, ha="center", va="center", fontsize=11.5, fontweight="bold", color=ec)
+        ax.text(x + W / 2, y + H / 2 - 0.25, body, ha="center", va="center", fontsize=9.5, color=C_INK)
+        if k < 3:
+            if row == 0:
+                _arr(ax, x + W + 0.03, y + H / 2, x + W + gap - 0.03, y + H / 2, ec)
+            else:
+                _arr(ax, x - 0.03, y + H / 2, x - gap + 0.03, y + H / 2, ec)
+    xc = 3 * (W + gap) + W / 2
+    _arr(ax, xc, 2.6 - 0.03, xc, 2.6 - 2.75 + H + 0.03, C_AMBER)
+    _arr(ax, W / 2, -0.15 - 0.05, W / 2, -0.6, C_RED)
+    ax.text(W / 2 + 0.15, -0.55, "단 조립·통합 시험으로 · 불합격 시 ④~⑤로 돌아가 보수(rework)",
+            fontsize=10, style="italic", color=C_MUTED, va="center")
+    ax.set_xlim(-0.2, 4 * W + 3 * gap + 0.2)
+    ax.set_ylim(-0.8, 4.7)
+    plt.show()
+
+
+# ------------------------------------------------------------
+# 6-9. 재사용과 피로 — 검사 가능한 결함 크기가 수명을 정한다 (Paris 법칙)
+# ------------------------------------------------------------
+def _w6_plot_fatigue(stress_MPa=250.0, a0_mm=1.5, cycles_per_flight=6, scatter=4.0):
+    C, m, KIC, Y = 2.0e-11, 3.2, 35.0, 1.12        # Al 2219급 교육용 대표치 (m/cycle, MPa√m)
+    ac = (KIC / (Y * stress_MPa)) ** 2 / np.pi
+    a0 = a0_mm / 1e3
+
+    def life(a_start):
+        if a_start >= ac:
+            return 0.0
+        k = C * (Y * stress_MPa * np.sqrt(np.pi)) ** m
+        e = (2 - m) / 2
+        return (ac ** e - a_start ** e) / (k * e)
+    N = life(a0)
+    flights = N / cycles_per_flight / scatter
+    a_list = np.logspace(np.log10(0.2e-3), np.log10(max(ac * 0.9, 0.3e-3)), 120)
+    f_list = [life(a) / cycles_per_flight / scatter for a in a_list]
+    fig, axs = plt.subplots(1, 2, figsize=(15, 4.4))
+    ax = axs[0]
+    _style(ax)
+    ns = np.linspace(0, N, 300)
+    k = C * (Y * stress_MPa * np.sqrt(np.pi)) ** m
+    e = (2 - m) / 2
+    a_n = (a0 ** e + k * e * ns) ** (1 / e) if N > 0 else np.array([a0])
+    ax.plot(ns / cycles_per_flight, a_n * 1e3, color=RED, lw=2.4)
+    ax.axhline(ac * 1e3, color=INK, ls="--", lw=1.4)
+    ax.text(0, ac * 1e3 * 1.03, f"임계 균열 {ac*1e3:.1f} mm (여기서 파단)", fontsize=9.5)
+    ax.set_xlabel("비행 횟수 (안전배수 적용 전)")
+    ax.set_ylabel("균열 길이 (mm)")
+    ax.set_title("① 균열은 처음엔 천천히, 끝에서 갑자기 자란다", fontsize=11.5, fontweight="bold", loc="left")
+    ax = axs[1]
+    _style(ax)
+    ax.loglog(np.array(a_list) * 1e3, np.maximum(f_list, 1e-1), color=PRIMARY, lw=2.4)
+    ax.plot([a0_mm], [max(flights, 1e-1)], "o", color=RED, ms=10)
+    ax.annotate(f"초기결함 {a0_mm:.1f} mm → {flights:,.0f}회", (a0_mm, max(flights, 1e-1)),
+                xytext=(10, 10), textcoords="offset points", fontsize=10)
+    ax.set_xlabel("비파괴검사로 '없다고 보장할 수 있는' 최소 결함 크기 (mm)")
+    ax.set_ylabel(f"허용 비행 횟수 (안전배수 {scatter:.0f} 적용)")
+    ax.set_title("② 검사가 정밀할수록 재사용 횟수가 늘어난다", fontsize=11.5, fontweight="bold", loc="left")
+    plt.tight_layout()
+    plt.show()
+    print(f"· 반복 응력 {stress_MPa:.0f} MPa, 초기결함 {a0_mm:.1f} mm, 비행당 압력 사이클 {cycles_per_flight}회")
+    print(f"· 파단까지 {N:,.0f} 사이클 → 안전배수 {scatter:.0f} 적용 시 허용 {flights:,.0f}회 비행")
+    print("· 응력을 조금만 올려도 수명이 크게 줄어드는 이유: 균열 성장률 ∝ (응력)^3.2")
+    print("· 반복 응력은 용접부·구멍 주변의 응력집중까지 반영한 '국부' 값 — 평균 막응력보다 훨씬 큼")
+
+
+def w6_reuse_fatigue_explorer():
+    """반복응력·초기결함 크기·비행당 사이클·안전배수를 바꿔 재사용 탱크의 피로 수명을 본다."""
+    _w6_interactive(_w6_plot_fatigue,
+                    stress_MPa=_w6_fs(250, 80, 320, 5, "반복 응력 (MPa)", ".0f"),
+                    a0_mm=_w6_fs(1.5, 0.2, 4.0, 0.1, "초기결함 크기 (mm)", ".1f"),
+                    cycles_per_flight=_w6_is(6, 1, 12, 1, "비행당 압력 사이클"),
+                    scatter=_w6_fs(4.0, 1.0, 6.0, 0.5, "안전배수", ".1f"))
